@@ -45,5 +45,6 @@ fixture-parentheses = false
 [lint.pyupgrade]
 keep-runtime-typing = true
 
-[lint.mccabe]
-max-complexity = 25
+[lint.per-file-ignores]
+"tests/**" = ["T20", "D102", "D107", "F841", "SIM105"]
+"ocpp/tests/**" = ["T20", "D102", "D107", "F841", "SIM105"]

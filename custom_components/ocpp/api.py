@@ -9,10 +9,12 @@ import re
 import ssl
 
 from functools import partial
-from homeassistant.config_entries import ConfigEntry, SOURCE_INTEGRATION_DISCOVERY
-from homeassistant.const import STATE_OK, STATE_UNAVAILABLE
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceResponse, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+
+from .core_errors import OcppError, OcppValidationError
+from .platform_adapter import HomeAssistantAdapter, STATE_OK, STATE_UNAVAILABLE
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from websockets import Subprotocol, NegotiationError
@@ -22,7 +24,7 @@ from websockets.asyncio.server import ServerConnection
 from .ocppv16 import ChargePoint as ChargePointv16
 from .ocppv201 import ChargePoint as ChargePointv201
 
-from .const import (
+from .core_const import (
     CentralSystemSettings,
     DOMAIN,
     OCPP_2_0,
@@ -101,6 +103,7 @@ class CentralSystem:
         """Instantiate instance of a CentralSystem."""
         self.hass = hass
         self.entry = entry
+        self.adapter = HomeAssistantAdapter(hass, entry)
         self.settings = CentralSystemSettings(**entry.data)
         self.subprotocols = self.settings.subprotocols
         self._server = None
@@ -110,50 +113,50 @@ class CentralSystem:
         self.connections = 0
 
         # Register custom services with home assistant
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_configure.value,
             self.handle_configure,
             CONF_SERVICE_DATA_SCHEMA,
-            supports_response=SupportsResponse.OPTIONAL,
+            SupportsResponse.OPTIONAL,
         )
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_get_configuration.value,
             self.handle_get_configuration,
             GCONF_SERVICE_DATA_SCHEMA,
-            supports_response=SupportsResponse.ONLY,
+            SupportsResponse.ONLY,
         )
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_data_transfer.value,
             self.handle_data_transfer,
             TRANS_SERVICE_DATA_SCHEMA,
         )
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_trigger_custom_message.value,
             self.handle_trigger_custom_message,
             CUSTMSG_SERVICE_DATA_SCHEMA,
         )
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_clear_profile.value,
             self.handle_clear_profile,
         )
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_set_charge_rate.value,
             self.handle_set_charge_rate,
             CHRGR_SERVICE_DATA_SCHEMA,
         )
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_update_firmware.value,
             self.handle_update_firmware,
             UFW_SERVICE_DATA_SCHEMA,
         )
-        self.hass.services.async_register(
+        self.adapter.register_service(
             DOMAIN,
             csvcs.service_get_diagnostics.value,
             self.handle_get_diagnostics,
@@ -170,7 +173,7 @@ class CentralSystem:
             # see https://community.home-assistant.io/t/certificate-authority-and-self-signed-certificate-for-ssl-tls/196970
             localhost_certfile = self.settings.ssl_certfile_path
             localhost_keyfile = self.settings.ssl_keyfile_path
-            await self.hass.async_add_executor_job(
+            await self.adapter.run_in_executor(
                 partial(
                     self.ssl_context.load_cert_chain,
                     localhost_certfile,
@@ -250,12 +253,7 @@ class CentralSystem:
 
                 if not config_flow:
                     # discovery_info for flow
-                    info = {"cp_id": cp_id, "entry": self.entry}
-                    await self.hass.config_entries.flow.async_init(
-                        DOMAIN,
-                        context={"source": SOURCE_INTEGRATION_DISCOVERY},
-                        data=info,
-                    )
+                    await self.adapter.on_unknown_charge_point(cp_id)
                     # use return to wait for config entry to reload after discovery
                     return
 
@@ -266,11 +264,21 @@ class CentralSystem:
 
             if websocket.subprotocol and websocket.subprotocol.startswith(OCPP_2_0):
                 charge_point = ChargePointv201(
-                    cp_id, websocket, self.hass, self.entry, self.settings, cp_settings
+                    cp_id,
+                    websocket,
+                    self.adapter,
+                    self.entry.data,
+                    self.settings,
+                    cp_settings,
                 )
             else:
                 charge_point = ChargePointv16(
-                    cp_id, websocket, self.hass, self.entry, self.settings, cp_settings
+                    cp_id,
+                    websocket,
+                    self.adapter,
+                    self.entry.data,
+                    self.settings,
+                    cp_settings,
                 )
             self.charge_points[cp_id] = charge_point
             self.connections += 1
@@ -616,19 +624,35 @@ class CentralSystem:
 
         return wrapper
 
+    def convert_ocpp_errors(func):
+        """Convert OCPP core exceptions to HA exceptions for the UI."""
+
+        async def wrapper(self, call, cp, *args, **kwargs):
+            try:
+                return await func(self, call, cp, *args, **kwargs)
+            except OcppValidationError as e:
+                raise ServiceValidationError(str(e)) from e
+            except OcppError as e:
+                raise HomeAssistantError(str(e)) from e
+
+        return wrapper
+
     # Define custom service handles for charge point
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_trigger_custom_message(self, call, cp):
         """Handle the message request with a custom message."""
         requested_message = call.data.get("requested_message")
         await cp.trigger_custom_message(requested_message)
 
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_clear_profile(self, call, cp):
         """Handle the clear profile service call."""
         await cp.clear_profile()
 
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_update_firmware(self, call, cp):
         """Handle the firmware update service call."""
         url = call.data.get("firmware_url")
@@ -636,12 +660,14 @@ class CentralSystem:
         await cp.update_firmware(url, delay)
 
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_get_diagnostics(self, call, cp):
         """Handle the get get diagnostics service call."""
         url = call.data.get("upload_url")
         await cp.get_diagnostics(url)
 
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_data_transfer(self, call, cp):
         """Handle the data transfer service call."""
         vendor = call.data.get("vendor_id")
@@ -650,6 +676,7 @@ class CentralSystem:
         await cp.data_transfer(vendor, message, data)
 
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_set_charge_rate(self, call, cp):
         """Handle the data transfer service call."""
         amps = call.data.get("limit_amps", None)
@@ -667,6 +694,7 @@ class CentralSystem:
             await cp.set_charge_rate(limit_amps=amps, conn_id=id)
 
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_configure(self, call, cp) -> ServiceResponse:
         """Handle the configure service call."""
         key = call.data.get("ocpp_key")
@@ -675,6 +703,7 @@ class CentralSystem:
         return {"reboot_required": result == SetVariableResult.reboot_required}
 
     @check_charger_available
+    @convert_ocpp_errors
     async def handle_get_configuration(self, call, cp) -> ServiceResponse:
         """Handle the get configuration service call."""
         key = call.data.get("ocpp_key")

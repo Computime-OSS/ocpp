@@ -1,4 +1,98 @@
-# Byte-compiled / optimized / DLL files
+# =============================================================================
+# Credentials & Secrets (NEVER commit these)
+# =============================================================================
+
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+
+# SSL/TLS certificates and keys
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+ca.srl
+
+# Nginx credentials
+nginx/auth/ocpp_passwd
+nginx/certs/*.key
+nginx/certs/*.crt
+nginx/certs/*.pem
+nginx/mtls/*.key
+nginx/mtls/*.crt
+nginx/mtls/*.csr
+nginx/mtls/ca.srl
+nginx/ca-state/*.srl
+
+# Keep directory structure with .gitkeep
+!**/.gitkeep
+
+.ha-venv/
+
+# =============================================================================
+# Home Assistant - Excluded Files
+# =============================================================================
+
+# Root-level HA config (e.g. dev/symlink setup) - never commit local state or secrets
+config/
+
+# HA secrets (NEVER commit) - when using homeassistant/config/ path
+homeassistant/config/secrets.yaml
+
+# HA internal storage (user-specific, auto-generated)
+homeassistant/config/.storage/
+
+# HA database (large, user-specific)
+homeassistant/config/home-assistant_v2.db
+homeassistant/config/home-assistant_v2.db-shm
+homeassistant/config/home-assistant_v2.db-wal
+
+# HA version file (auto-generated)
+homeassistant/config/.HA_VERSION
+
+# HA run lock file
+homeassistant/config/.ha_run.lock
+
+# TTS cache (auto-generated)
+homeassistant/config/tts/
+
+# Python dependencies (auto-installed)
+homeassistant/config/deps/
+
+# Log files
+homeassistant/config/*.log
+homeassistant/config/*.log.*
+
+# Blueprints (user-specific, can be downloaded)
+homeassistant/config/blueprints/
+
+# Custom components - users should install manually to get latest versions
+homeassistant/config/custom_components/
+
+# Frontend resources - users should install manually via HACS
+homeassistant/config/www/
+
+# =============================================================================
+# Home Assistant - INCLUDED Essential Files (tracked in repo)
+# =============================================================================
+# These configuration files ARE tracked:
+#   - homeassistant/config/configuration.yaml    (main config with OCPP templates)
+#   - homeassistant/config/automations.yaml      (automation rules)
+#   - homeassistant/config/scripts.yaml          (script definitions)
+#   - homeassistant/config/scenes.yaml           (scene definitions)
+#   - homeassistant/config/ocpp_dashboard_template.yaml (dashboard template)
+#   - homeassistant/config/themes/               (theme directory structure)
+#
+# Users must manually install:
+#   - OCPP Integration: https://github.com/lbbrhzn/ocpp (via HACS)
+#   - Time Picker Card: https://github.com/GeorgeSG/lovelace-time-picker-card (via HACS)
+
+# =============================================================================
+# Python
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class

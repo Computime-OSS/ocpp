@@ -17,6 +17,7 @@ from custom_components.ocpp.chargepoint import (
     _ConnectorAwareMetrics as CAM,
     MeasurandValue,
 )
+from custom_components.ocpp.platform_adapter import HomeAssistantAdapter
 from custom_components.ocpp.const import (
     DOMAIN,
     CentralSystemSettings,
@@ -73,7 +74,8 @@ def _mk_cp(hass, *, version=OcppVersion.V201):
     )
     # Minimal fake connection
     conn = SimpleNamespace(state=State.CLOSED, close=lambda: asyncio.sleep(0))
-    cp = ChargePoint("CP_A", conn, version, hass, entry, centr, chg)
+    adapter = HomeAssistantAdapter(hass, entry)
+    cp = ChargePoint("CP_A", conn, version, adapter, entry.data, centr, chg)
     cp._metrics[(0, csess.meter_start.value)].value = None
     return cp
 
@@ -163,12 +165,13 @@ async def test_async_update_device_info_updates_metrics_and_registry(hass):
 
         state = None
 
+    adapter = HomeAssistantAdapter(hass, entry)
     cp = ChargePoint(
         id="CP_ID",
         connection=DummyConn(),
         version=OcppVersion.V201,
-        hass=hass,
-        entry=entry,
+        adapter=adapter,
+        entry_data=entry.data,
         central=central,
         charger=charger,
     )
@@ -293,12 +296,13 @@ async def test_handle_call_wraps_notimplementederror_and_sends(hass):
 
     conn = SimpleNamespace(state=State.OPEN, close=lambda: None)
 
+    adapter = HomeAssistantAdapter(hass, SimpleNamespace(entry_id="e1", data={}))
     cp = ChargePoint(
         "CP_ID",
         conn,
         OcppVersion.V201,
-        hass,
-        SimpleNamespace(entry_id="e1", data={}),
+        adapter,
+        {},
         central,
         charger,
     )

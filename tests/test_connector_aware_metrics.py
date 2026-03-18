@@ -7,7 +7,7 @@ from custom_components.ocpp.chargepoint import _ConnectorAwareMetrics, Metric
 
 def M(v=None, unit=None):
     """Help to create a Metric with a value and a None timestamp."""
-    return Metric(v, unit)
+    return Metric(v, unit, None)
 
 
 def test_flat_set_get_contains_len_iter():

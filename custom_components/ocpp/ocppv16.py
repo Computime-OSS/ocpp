@@ -5,11 +5,10 @@ import logging
 
 import time
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.const import UnitOfTime
 import voluptuous as vol
 from websockets.asyncio.server import ServerConnection
+
+from .platform_adapter import PlatformAdapter
 
 from ocpp.routing import on
 from ocpp.v16 import call, call_result
@@ -52,13 +51,15 @@ from .enums import (
     Profiles as prof,
 )
 
-from .const import (
+from .core_const import (
     CentralSystemSettings,
     ChargerSystemSettings,
     DEFAULT_MEASURAND,
-    HA_ENERGY_UNIT,
     MEASURANDS,
 )
+
+# Local constants to avoid HA imports in core
+HA_ENERGY_UNIT = "kWh"
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
@@ -85,8 +86,8 @@ class ChargePoint(cp):
         self,
         id: str,
         connection: ServerConnection,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
+        adapter: PlatformAdapter,
+        entry_data: dict,
         central: CentralSystemSettings,
         charger: ChargerSystemSettings,
     ):
@@ -96,8 +97,8 @@ class ChargePoint(cp):
             id,
             connection,
             OcppVersion.V16,
-            hass,
-            entry,
+            adapter,
+            entry_data,
             central,
             charger,
         )
@@ -629,13 +630,13 @@ class ChargePoint(cp):
                 if metric is not None:
                     metric.extra_attr[pending_key] = info
 
-                self.hass.async_create_task(self.update(self.settings.cpid))
+                self.adapter.schedule_task(self.update(self.settings.cpid))
                 return True
 
             if status == AvailabilityStatus.accepted:
                 if metric is not None:
                     metric.extra_attr.pop(pending_key, None)
-                self.hass.async_create_task(self.update(self.settings.cpid))
+                self.adapter.schedule_task(self.update(self.settings.cpid))
                 return True
 
             _LOGGER.warning("Failed with response: %s", resp.status)
@@ -1015,13 +1016,13 @@ class ChargePoint(cp):
                 self._metrics[session_key].value = round(
                     (time.time() - tx_start_epoch) / 60
                 )
-                self._metrics[session_key].unit = UnitOfTime.MINUTES
+                self._metrics[session_key].unit = self.adapter.unit_of_time_minutes
             else:
                 _LOGGER.debug(
                     "Skipping session time calc — invalid tx_start_epoch=%s",
                     tx_start_epoch,
                 )
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
         return call_result.MeterValues()
 
     @on(Action.boot_notification)
@@ -1035,7 +1036,7 @@ class ChargePoint(cp):
         self.received_boot_notification = True
         _LOGGER.debug("Received boot notification for %s: %s", self.id, kwargs)
 
-        self.hass.async_create_task(self.async_update_device_info_v16(kwargs))
+        self.adapter.schedule_task(self.async_update_device_info_v16(kwargs))
         self._register_boot_notification()
         return resp
 
@@ -1067,22 +1068,22 @@ class ChargePoint(cp):
                     if meas in self._metrics[connector_id]:
                         self._metrics[(connector_id, meas)].value = 0
 
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
         return call_result.StatusNotification()
 
     @on(Action.firmware_status_notification)
     def on_firmware_status(self, status, **kwargs):
         """Handle firmware status notification."""
         self._metrics[0][cstat.firmware_status.value].value = status
-        self.hass.async_create_task(self.update(self.settings.cpid))
-        self.hass.async_create_task(self.notify_ha(f"Firmware upload status: {status}"))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.notify_ha(f"Firmware upload status: {status}"))
         return call_result.FirmwareStatusNotification()
 
     @on(Action.diagnostics_status_notification)
     def on_diagnostics_status(self, status, **kwargs):
         """Handle diagnostics status notification."""
         _LOGGER.info("Diagnostics upload status: %s", status)
-        self.hass.async_create_task(
+        self.adapter.schedule_task(
             self.notify_ha(f"Diagnostics upload status: {status}")
         )
         return call_result.DiagnosticsStatusNotification()
@@ -1096,7 +1097,7 @@ class ChargePoint(cp):
             timestamp,
             kwargs.get(om.tech_info.name, "none"),
         )
-        self.hass.async_create_task(
+        self.adapter.schedule_task(
             self.notify_ha(f"Security event notification received: {type}")
         )
         return call_result.SecurityEventNotification()
@@ -1132,7 +1133,7 @@ class ChargePoint(cp):
             self._metrics[(connector_id, csess.session_time.value)].value = 0
             self._metrics[
                 (connector_id, csess.session_time.value)
-            ].unit = UnitOfTime.MINUTES
+            ].unit = self.adapter.unit_of_time_minutes
             self._metrics[(connector_id, csess.session_energy.value)].value = 0.0
             self._metrics[
                 (connector_id, csess.session_energy.value)
@@ -1148,7 +1149,7 @@ class ChargePoint(cp):
                 transaction_id=0,
             )
 
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
         return result
 
     @on(Action.stop_transaction)
@@ -1200,7 +1201,7 @@ class ChargePoint(cp):
             if key in self._metrics:
                 self._metrics[key].value = 0
 
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
         return call_result.StopTransaction(
             id_tag_info={om.status.value: AuthorizationStatus.accepted.value}
         )
@@ -1218,5 +1219,5 @@ class ChargePoint(cp):
         """Handle a Heartbeat."""
         now = datetime.now(tz=UTC)
         self._metrics[0][cstat.heartbeat.value].value = now
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
         return call_result.Heartbeat(current_time=now.strftime("%Y-%m-%dT%H:%M:%SZ"))

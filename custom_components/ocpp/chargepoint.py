@@ -11,16 +11,15 @@ import secrets
 import string
 import time
 
-from homeassistant.components.persistent_notification import DOMAIN as PN_DOMAIN
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.const import STATE_OK, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.const import UnitOfTime
-from homeassistant.helpers import device_registry, entity_registry
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from websockets.asyncio.server import ServerConnection
 from websockets.exceptions import WebSocketException
 from websockets.protocol import State
+
+from .platform_adapter import (
+    PlatformAdapter,
+    STATE_OK,
+    STATE_UNAVAILABLE,
+)
 
 from ocpp.charge_point import ChargePoint as cp
 from ocpp.v16 import call as callv16
@@ -44,7 +43,7 @@ from .enums import (
     Profiles as prof,
 )
 
-from .const import (
+from .core_const import (
     CentralSystemSettings,
     ChargerSystemSettings,
     CONF_AUTH_LIST,
@@ -54,29 +53,27 @@ from .const import (
     CONF_MONITORED_VARIABLES,
     CONF_NUM_CONNECTORS,
     CONF_CPIDS,
-    CONFIG,
-    DATA_UPDATED,
     DEFAULT_ENERGY_UNIT,
     DEFAULT_NUM_CONNECTORS,
     DEFAULT_POWER_UNIT,
     DEFAULT_MEASURAND,
     DOMAIN,
-    HA_ENERGY_UNIT,
-    HA_POWER_UNIT,
-    UNITS_OCCP_TO_HA,
 )
 
-TIME_MINUTES = UnitOfTime.MINUTES
+# Local constants to avoid HA imports in core
+HA_ENERGY_UNIT = "kWh"
+HA_POWER_UNIT = "kW"
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
 
 class Metric:
     """Metric class."""
 
-    def __init__(self, value, unit):
+    def __init__(self, value, unit, adapter=None):
         """Initialize a Metric."""
         self._value = value
         self._unit = unit
+        self._adapter = adapter
         self._extra_attr = {}
 
     @property
@@ -102,7 +99,9 @@ class Metric:
     @property
     def ha_unit(self):
         """Get the home assistant unit of the metric."""
-        return UNITS_OCCP_TO_HA.get(self._unit, self._unit)
+        if self._adapter:
+            return self._adapter.ocpp_unit_to_platform_unit(self._unit)
+        return self._unit  # Fallback
 
     @property
     def extra_attr(self):
@@ -125,8 +124,11 @@ class _ConnectorAwareMetrics(MutableMapping):
     Iteration, len, keys(), values(), items() operate on connector 0 (flat view).
     """
 
-    def __init__(self):
-        self._by_conn = defaultdict(lambda: defaultdict(lambda: Metric(None, None)))
+    def __init__(self, adapter=None):
+        self._adapter = adapter
+        self._by_conn = defaultdict(
+            lambda: defaultdict(lambda: Metric(None, None, adapter))
+        )
 
     def __getitem__(self, key):
         if isinstance(key, tuple) and len(key) == 2 and isinstance(key[0], int):
@@ -229,8 +231,8 @@ class ChargePoint(cp):
         id,  # is charger cp_id not HA cpid
         connection,
         version: OcppVersion,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
+        adapter: PlatformAdapter,
+        entry_data: dict,
         central: CentralSystemSettings,
         charger: ChargerSystemSettings,
     ):
@@ -255,8 +257,8 @@ class ChargePoint(cp):
                 charger.skip_schema_validation
             )
 
-        self.hass = hass
-        self.entry = entry
+        self.adapter = adapter
+        self.entry_data = entry_data
         self.cs_settings = central
         self.settings = charger
         self.status = "init"
@@ -272,7 +274,7 @@ class ChargePoint(cp):
         self._charger_reports_session_energy = False
 
         # Connector-aware, but backwards compatible:
-        self._metrics: _ConnectorAwareMetrics = _ConnectorAwareMetrics()
+        self._metrics: _ConnectorAwareMetrics = _ConnectorAwareMetrics(self.adapter)
 
         # Init standard metrics for connector 0
         self._metrics[(0, cdet.identifier.value)].value = id
@@ -283,13 +285,25 @@ class ChargePoint(cp):
         self._remote_id_tag = "".join(secrets.choice(alphabet) for i in range(20))
         self.num_connectors: int = DEFAULT_NUM_CONNECTORS
 
+    @property
+    def hass(self):
+        """Compatibility helper to provide Home Assistant instance."""
+        return getattr(self.adapter, "hass", None)
+
+    @property
+    def entry(self):
+        """Compatibility helper to provide ConfigEntry."""
+        return getattr(self.adapter, "entry", None)
+
     def _init_connector_slots(self, conn_id: int) -> None:
         """Ensure connector-scoped metrics exist and carry the right units."""
         _ = self._metrics[(conn_id, cstat.status_connector.value)]
         _ = self._metrics[(conn_id, cstat.error_code_connector.value)]
         _ = self._metrics[(conn_id, csess.transaction_id.value)]
 
-        self._metrics[(conn_id, csess.session_time.value)].unit = TIME_MINUTES
+        self._metrics[
+            (conn_id, csess.session_time.value)
+        ].unit = self.adapter.unit_of_time_minutes
         self._metrics[(conn_id, csess.session_energy.value)].unit = HA_ENERGY_UNIT
         self._metrics[(conn_id, csess.meter_start.value)].unit = HA_ENERGY_UNIT
 
@@ -333,7 +347,7 @@ class ChargePoint(cp):
             await self.get_heartbeat_interval()
 
             accepted_measurands: str = await self.get_supported_measurands()
-            updated_entry = {**self.entry.data}
+            updated_entry = {**self.entry_data}
             for i in range(len(updated_entry[CONF_CPIDS])):
                 if self.id in updated_entry[CONF_CPIDS][i]:
                     s = updated_entry[CONF_CPIDS][i][self.id]
@@ -344,7 +358,8 @@ class ChargePoint(cp):
                         s[CONF_NUM_CONNECTORS] = int(self.num_connectors)
                     break
             # if an entry differs this will unload/reload and stop/restart the central system/websocket
-            self.hass.config_entries.async_update_entry(self.entry, data=updated_entry)
+            await self.adapter.persist_charge_point_config(self.id, updated_entry)
+            self.entry_data = updated_entry
 
             await self.set_standard_configuration()
 
@@ -481,7 +496,7 @@ class ChargePoint(cp):
         # after 10s to allow for when a boot notification has not been received
         await asyncio.sleep(10)
         if not self.post_connect_success:
-            self.hass.async_create_task(self.post_connect())
+            self.adapter.schedule_task(self.post_connect())
 
         while connection.state is State.OPEN:
             try:
@@ -588,10 +603,7 @@ class ChargePoint(cp):
         self._metrics[(0, cdet.serial.value)].value = serial
 
         identifiers = {(DOMAIN, self.id), (DOMAIN, self.settings.cpid)}
-
-        registry = device_registry.async_get(self.hass)
-        registry.async_get_or_create(
-            config_entry_id=self.entry.entry_id,
+        await self.adapter.update_device_info(
             identifiers=identifiers,
             manufacturer=vendor,
             model=model,
@@ -600,50 +612,21 @@ class ChargePoint(cp):
 
     def _register_boot_notification(self):
         if self.triggered_boot_notification is False:
-            self.hass.async_create_task(self.notify_ha(f"Charger {self.id} rebooted"))
+            self.adapter.schedule_task(self.notify_ha(f"Charger {self.id} rebooted"))
             if not self.post_connect_success:
-                self.hass.async_create_task(self.post_connect())
+                self.adapter.schedule_task(self.post_connect())
 
     async def update(self, cpid: str):
-        """Update sensors values in HA (charger + connector child devices)."""
-        er = entity_registry.async_get(self.hass)
-        dr = device_registry.async_get(self.hass)
-
-        identifiers = {(DOMAIN, cpid), (DOMAIN, self.id)}
-        root_dev = dr.async_get_device(identifiers)
-        if root_dev is None:
-            return
-
-        to_visit: list[str] = [root_dev.id]
-        visited: set[str] = set()
-        active_entities: set[str] = set()
-
-        while to_visit:
-            dev_id = to_visit.pop(0)
-            if dev_id in visited:
-                continue
-            visited.add(dev_id)
-
-            # Collect enabled and currently loaded entities for this device
-            for ent in entity_registry.async_entries_for_device(er, dev_id):
-                if getattr(ent, "disabled", False) or getattr(ent, "disabled_by", None):
-                    continue
-                if self.hass.states.get(ent.entity_id) is None:
-                    continue
-                active_entities.add(ent.entity_id)
-
-            for dev in dr.devices.values():
-                if dev.via_device_id == dev_id and dev.id not in visited:
-                    to_visit.append(dev.id)
-
-        async_dispatcher_send(self.hass, DATA_UPDATED, active_entities)
+        """Update sensors values for a specific charge point."""
+        # Platform-specific logic (entity lookup + dispatcher) is handled by the adapter.
+        self.adapter.signal_state_changed(cpid)
 
     def get_authorization_status(self, id_tag):
         """Get the authorization status for an id_tag."""
         # authorize if its the tag of this charger used for remote start_transaction
         if id_tag == self._remote_id_tag:
             return AuthorizationStatus.accepted.value
-        config = self.hass.data[DOMAIN].get(CONFIG, {})
+        config = self.adapter.get_config()
         # get the default authorization status. Use accept if not configured
         default_auth_status = config.get(
             CONF_DEFAULT_AUTH_STATUS, AuthorizationStatus.accepted.value
@@ -1044,38 +1027,10 @@ class ChargePoint(cp):
 
     def get_ha_metric(self, measurand: str, connector_id: int | None = None):
         """Return last known value in HA for given measurand, or None if not available."""
-        base = self.settings.cpid.lower()
-        meas_slug = measurand.lower().replace(".", "_")
-
-        # Build list of possible sensor entity IDs.
-        # Include connector-specific ID if applicable, then the generic one as fallback.
-        candidates: list[str] = []
-        if connector_id and connector_id > 0:
-            candidates.append(f"sensor.{base}_connector_{connector_id}_{meas_slug}")
-        candidates.append(f"sensor.{base}_{meas_slug}")
-
-        # Return the first valid state found among candidates.
-        for entity_id in candidates:
-            try:
-                st = self.hass.states.get(entity_id)
-            except Exception as e:
-                _LOGGER.debug("Error getting entity %s from HA: %s", entity_id, e)
-                st = None
-
-            if st and st.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN, None):
-                return st.state
-
-        return None
+        return self.adapter.get_metric_fallback(
+            self.settings.cpid, measurand, connector_id
+        )
 
     async def notify_ha(self, msg: str, title: str = "Ocpp integration"):
-        """Notify user via HA web frontend."""
-        await self.hass.services.async_call(
-            PN_DOMAIN,
-            "create",
-            service_data={
-                "title": title,
-                "message": msg,
-            },
-            blocking=False,
-        )
-        return True
+        """Notify user via the host platform (Home Assistant or other)."""
+        return await self.adapter.notify_user(msg, title=title)

@@ -6,10 +6,7 @@ from datetime import datetime, UTC
 from dataclasses import dataclass, field
 import logging
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ServiceValidationError, HomeAssistantError
+from .platform_adapter import PlatformAdapter
 from websockets.asyncio.server import ServerConnection
 
 import ocpp.exceptions
@@ -51,12 +48,13 @@ from .enums import (
     HAChargerSession as csess,
 )
 
-from .const import (
+from .core_const import (
     CentralSystemSettings,
     ChargerSystemSettings,
     DOMAIN,
     HA_ENERGY_UNIT,
 )
+from .core_errors import OcppError, OcppValidationError
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
@@ -90,8 +88,8 @@ class ChargePoint(cp):
         self,
         id: str,
         connection: ServerConnection,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
+        adapter: PlatformAdapter,
+        entry_data: dict,
         central: CentralSystemSettings,
         charger: ChargerSystemSettings,
     ):
@@ -101,8 +99,8 @@ class ChargePoint(cp):
             id,
             connection,
             connection.subprotocol.replace("ocpp", ""),
-            hass,
-            entry,
+            adapter,
+            entry_data,
             central,
             charger,
         )
@@ -208,7 +206,7 @@ class ChargePoint(cp):
         self._pending_status_notifications = []
         for t, st, evse_id, conn_id in pending:
             self._apply_status_notification(t, st, evse_id, conn_id)
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
 
     def _total_connectors(self) -> int:
         """Total physical connectors across all EVSE."""
@@ -362,12 +360,8 @@ class ChargePoint(cp):
             req = call.SetChargingProfile(evse_target, profile)
             resp: call_result.SetChargingProfile = await self.call(req)
             if resp.status != ChargingProfileStatusEnumType.accepted:
-                raise HomeAssistantError(
-                    translation_domain=DOMAIN,
-                    translation_key="set_variables_error",
-                    translation_placeholders={
-                        "message": f"{str(resp.status)}: {str(resp.status_info)}"
-                    },
+                raise OcppError(
+                    f"SetChargingProfile rejected: {resp.status}: {resp.status_info}"
                 )
             return
 
@@ -410,12 +404,8 @@ class ChargePoint(cp):
         )
         resp: call_result.SetChargingProfile = await self.call(req)
         if resp.status != ChargingProfileStatusEnumType.accepted:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="set_variables_error",
-                translation_placeholders={
-                    "message": f"{str(resp.status)}: {str(resp.status_info)}"
-                },
+            raise OcppError(
+                f"SetChargingProfile rejected: {resp.status}: {resp.status_info}"
             )
 
     async def set_availability(self, state: bool = True, connector_id: int | None = 0):
@@ -500,21 +490,14 @@ class ChargePoint(cp):
         resp = await self.call(req)
         if resp.status != ResetStatusEnumType.accepted.value:
             status_suffix: str = f": {resp.status_info}" if resp.status_info else ""
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="ocpp_call_error",
-                translation_placeholders={"message": resp.status + status_suffix},
-            )
+            raise OcppError(f"Reset rejected: {resp.status}{status_suffix}")
 
     @staticmethod
     def _parse_ocpp_key(key: str) -> tuple:
         try:
             [c, v] = key.split("/")
         except ValueError:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="invalid_ocpp_key",
-            )
+            raise OcppValidationError("Invalid OCPP key; expected format Component/Variable")
         [cname, paren, cinstance] = c.partition("(")
         cinstance = cinstance.partition(")")[0]
         [vname, paren, vinstance] = v.partition("(")
@@ -536,18 +519,10 @@ class ChargePoint(cp):
         try:
             resp: call_result.GetVariables = await self.call(req)
         except Exception as e:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="ocpp_call_error",
-                translation_placeholders={"message": str(e)},
-            )
+            raise OcppError(f"GetVariables failed: {e}") from e
         result: dict = resp.get_variable_result[0]
         if result["attribute_status"] != GetVariableStatusEnumType.accepted:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="get_variables_error",
-                translation_placeholders={"message": str(result)},
-            )
+            raise OcppError(f"GetVariables rejected: {result}")
         return result["attribute_value"]
 
     async def configure(self, key: str, value: str) -> SetVariableResult:
@@ -559,22 +534,14 @@ class ChargePoint(cp):
         try:
             resp: call_result.SetVariables = await self.call(req)
         except Exception as e:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="ocpp_call_error",
-                translation_placeholders={"message": str(e)},
-            )
+            raise OcppError(f"SetVariables failed: {e}") from e
         result: dict = resp.set_variable_result[0]
         if result["attribute_status"] == SetVariableStatusEnumType.accepted:
             return SetVariableResult.accepted
         elif result["attribute_status"] == SetVariableStatusEnumType.reboot_required:
             return SetVariableResult.reboot_required
         else:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="set_variables_error",
-                translation_placeholders={"message": str(result)},
-            )
+            raise OcppError(f"SetVariables rejected: {result}")
 
     @on(Action.boot_notification)
     def on_boot_notification(self, charging_station, reason, **kwargs):
@@ -585,9 +552,7 @@ class ChargePoint(cp):
             status="Accepted",
         )
 
-        self.hass.async_create_task(
-            self.async_update_device_info_v201(charging_station)
-        )
+        self.adapter.schedule_task(self.async_update_device_info_v201(charging_station))
         self._inventory = None
         self._register_boot_notification()
         return resp
@@ -600,7 +565,7 @@ class ChargePoint(cp):
     def _report_evse_status(self, evse_id: int, evse_status_v16: ChargePointStatusv16):
         """Report EVSE-level status on the global connector."""
         self._metrics[(0, cstat.status_connector.value)].value = evse_status_v16.value
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
 
     @on(Action.status_notification)
     def on_status_notification(
@@ -616,7 +581,7 @@ class ChargePoint(cp):
         self._apply_status_notification(
             timestamp, connector_status, evse_id, connector_id
         )
-        self.hass.async_create_task(self.update(self.settings.cpid))
+        self.adapter.schedule_task(self.update(self.settings.cpid))
         return call_result.StatusNotification()
 
     @on(Action.firmware_status_notification)
@@ -878,7 +843,7 @@ class ChargePoint(cp):
             self._metrics[(global_idx, csess.session_time.value)].value = 0
             self._metrics[
                 (global_idx, csess.session_time.value)
-            ].unit = UnitOfTime.MINUTES
+            ].unit = self.adapter.unit_of_time_minutes
         else:
             if self._tx_start_time.get(global_idx):
                 elapsed = (t - self._tx_start_time[global_idx]).total_seconds()
@@ -888,13 +853,13 @@ class ChargePoint(cp):
                 ].value = duration_minutes
                 self._metrics[
                     (global_idx, csess.session_time.value)
-                ].unit = UnitOfTime.MINUTES
+                ].unit = self.adapter.unit_of_time_minutes
             if event_type == TransactionEventEnumType.ended.value:
                 self._metrics[(global_idx, csess.transaction_id.value)].value = ""
                 self._metrics[(global_idx, cstat.id_tag.value)].value = ""
                 self._tx_start_time.pop(global_idx, None)
 
         if not offline:
-            self.hass.async_create_task(self.update(self.settings.cpid))
+            self.adapter.schedule_task(self.update(self.settings.cpid))
 
         return response
