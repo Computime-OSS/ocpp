@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Standalone OCPP 1.6 server capability test script.
 
 Tests the OCPP Central System (server) by acting as a charge point client.
@@ -6,8 +7,11 @@ MeterValues, RemoteStartTransaction, RemoteStopTransaction, SetChargingProfile,
 StatusNotification, ChangeAvailability, Heartbeat.
 
 No Home Assistant dependencies; uses only the ocpp and websockets libraries.
-Server-initiated actions (GetConfiguration, SetChargingProfile, etc.) are
-marked passed when the server sends them and we respond successfully.
+Server-initiated actions (GetConfiguration, ChangeConfiguration, TriggerMessage,
+SetChargingProfile, etc.) are marked passed when the server sends them and we respond.
+ChangeConfiguration and TriggerMessage are required for Home Assistant’s post_connect
+flow (measurands, meter interval, triggers); without them the CSMS logs NotImplemented
+and device setup may not finish (no entities).
 RemoteStartTransaction / RemoteStopTransaction are only tested if the server
 sends them (e.g. when triggered from the HA UI).
 
@@ -16,9 +20,10 @@ Usage:
 
 Results are stored in tests/ocpp_capability_test_results.json and printed to stdout.
 
-After client-side tests, the script prints instructions for each server-initiated
-action in sequence (RemoteStartTransaction, RemoteStopTransaction, etc.) and
-waits up to SERVER_ACTION_WAIT_SECONDS for the CSMS to send each message.
+After client-side tests, the script prints instructions for each remaining
+server-initiated action (not GetConfiguration — the CSMS usually sends that
+automatically during post_connect) and waits up to SERVER_ACTION_WAIT_SECONDS
+per step for you to trigger it from the CSMS.
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ import asyncio
 import json
 import logging
 import sys
+from collections.abc import Coroutine
+from typing import Any
 from datetime import datetime, UTC
 from pathlib import Path
 
@@ -41,15 +48,17 @@ from ocpp.v16.enums import (
     ChargePointStatus,
     ChargingProfileStatus,
     ClearChargingProfileStatus,
+    ConfigurationStatus,
     RegistrationStatus,
     RemoteStartStopStatus,
+    TriggerMessageStatus,
 )
 
 # -----------------------------------------------------------------------------
-# Configuration (hardcoded; change here for your server)
+# Configuration (change here for your server)
 # -----------------------------------------------------------------------------
-TARGET_WS_URL = "ws://127.0.0.1:9000/CP_001"
-CHARGE_POINT_ID = "CP_001"
+TARGET_WS_URL = "ws://127.0.0.1:9000/TEST-002"
+CHARGE_POINT_ID = "TEST-002"
 SUBPROTOCOLS = ["ocpp1.6"]
 RESULTS_FILE = Path(__file__).resolve().parent / "ocpp_capability_test_results.json"
 TEST_TIMEOUT_SECONDS = 60
@@ -57,24 +66,27 @@ TEST_TIMEOUT_SECONDS = 60
 SERVER_ACTION_WAIT_SECONDS = TEST_TIMEOUT_SECONDS
 
 # After client tests: prompt and wait (in order) for these server-initiated calls.
-# Actions already received earlier (e.g. GetConfiguration on connect) are skipped.
+# GetConfiguration is not listed here — the CSMS usually sends it during post_connect
+# (same window as ChangeConfiguration); the handler still records it when received.
+# Actions already received earlier are skipped.
 SERVER_PROMPT_SEQUENCE: list[str] = [
     "RemoteStartTransaction",
     "RemoteStopTransaction",
     "ClearChargingProfile",
     "ChangeAvailability",
-    "GetConfiguration",
     "SetChargingProfile",
 ]
 
 SERVER_ACTION_USER_INSTRUCTIONS: dict[str, str] = {
     "RemoteStartTransaction": (
         "In your CSMS (e.g. Home Assistant OCPP), trigger remote start / "
-        "RemoteStartTransaction for this charge point (connector 1 if asked)."
+        "RemoteStartTransaction for this charge point (connector 1 if asked). "
+        "After Accepted, this script sends StartTransaction + StatusNotification(charging) "
+        "so the CSMS has an active session."
     ),
     "RemoteStopTransaction": (
-        "In your CSMS, trigger remote stop / RemoteStopTransaction for the active "
-        "charging session on this charge point."
+        "After Remote Start above, trigger remote stop / RemoteStopTransaction for "
+        "that session. The script then sends StopTransaction + StatusNotification(available)."
     ),
     "ClearChargingProfile": (
         "In your CSMS, send ClearChargingProfile for this charge point (connector 1 "
@@ -83,10 +95,6 @@ SERVER_ACTION_USER_INSTRUCTIONS: dict[str, str] = {
     "ChangeAvailability": (
         "In your CSMS, send ChangeAvailability (e.g. Operative/Inoperative) for "
         "this charge point or a connector."
-    ),
-    "GetConfiguration": (
-        "In your CSMS, request configuration / send GetConfiguration for this "
-        "charge point (if your UI exposes it)."
     ),
     "SetChargingProfile": (
         "In your CSMS, set a charging profile / send SetChargingProfile for this "
@@ -173,15 +181,112 @@ class TestChargePoint(CP16Base):
         super().__init__(charge_point_id, websocket)
         self.results = results
         self.active_transaction_id: int = 0
+        # Persist keys set via ChangeConfiguration so GetConfiguration matches (OCPP post_connect).
+        self._config: dict[str, str] = {}
         self._server_action_events: dict[str, asyncio.Event] = {
             k: asyncio.Event() for k in SERVER_ACTION_USER_INSTRUCTIONS
         }
+        self._remote_session_connector_id: int = 1
+        self._follow_up_tasks: list[asyncio.Task[Any]] = []
+
+    def _schedule_coro(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run async follow-up from synchronous @on handlers (RemoteStart/RemoteStop)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            LOGGER.warning("No running event loop; cannot run async OCPP follow-up.")
+            return
+        task = loop.create_task(coro)
+        self._follow_up_tasks.append(task)
 
     def _notify_server_action(self, action: str) -> None:
         """Signal waiters that this server-initiated action was handled."""
         ev = self._server_action_events.get(action)
         if ev is not None:
             ev.set()
+
+    async def _begin_session_from_remote_start(self, id_tag: str, connector_id: int) -> None:
+        """After RemoteStart Accepted: send StartTransaction so CSMS tracks a session for RemoteStop."""
+        global LOG_ACTION
+        LOG_ACTION = "RemoteStart→StartTransaction"
+        self._remote_session_connector_id = connector_id
+        LOGGER.info(
+            "Fake session: sending StartTransaction after RemoteStart (id_tag=%s, connector=%s).",
+            id_tag,
+            connector_id,
+        )
+        try:
+            req = call.StartTransaction(
+                connector_id=connector_id,
+                id_tag=id_tag,
+                meter_start=1000,
+                timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            resp = await self.call(req)
+            self.active_transaction_id = resp.transaction_id
+            status = resp.id_tag_info.get("status") if resp.id_tag_info else None
+            if status == AuthorizationStatus.accepted:
+                LOGGER.info(
+                    "Fake session active: transaction_id=%s — use RemoteStop in CSMS to end.",
+                    self.active_transaction_id,
+                )
+                await self.call(
+                    call.StatusNotification(
+                        connector_id=connector_id,
+                        error_code=ChargePointErrorCode.no_error,
+                        status=ChargePointStatus.charging,
+                        timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    )
+                )
+            else:
+                LOGGER.warning(
+                    "StartTransaction after RemoteStart not accepted: %s",
+                    status,
+                )
+        except Exception:
+            LOGGER.exception("Begin fake session after RemoteStart failed")
+        finally:
+            LOG_ACTION = None
+
+    async def _end_session_from_remote_stop(self, transaction_id: int | None) -> None:
+        """After RemoteStop Accepted: send StopTransaction so CSMS clears the session."""
+        global LOG_ACTION
+        LOG_ACTION = "RemoteStop→StopTransaction"
+        tid: int | None = transaction_id
+        if tid in (None, 0) and self.active_transaction_id:
+            tid = self.active_transaction_id
+        if not tid:
+            LOGGER.warning("RemoteStop received but no transaction_id to stop.")
+            LOG_ACTION = None
+            return
+        LOGGER.info(
+            "Fake session: sending StopTransaction after RemoteStop (transaction_id=%s).",
+            tid,
+        )
+        try:
+            await self.call(
+                call.StopTransaction(
+                    meter_stop=2000,
+                    timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    transaction_id=int(tid),
+                    reason="Remote",
+                    id_tag="test_tag",
+                )
+            )
+            self.active_transaction_id = 0
+            await self.call(
+                call.StatusNotification(
+                    connector_id=self._remote_session_connector_id,
+                    error_code=ChargePointErrorCode.no_error,
+                    status=ChargePointStatus.available,
+                    timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                )
+            )
+            LOGGER.info("Fake session ended after RemoteStop.")
+        except Exception:
+            LOGGER.exception("End fake session after RemoteStop failed")
+        finally:
+            LOG_ACTION = None
 
     # ----- Server-initiated: record when we receive and respond -----
     @on(Action.get_configuration)
@@ -193,12 +298,46 @@ class TestChargePoint(CP16Base):
         if not keys:
             out = call_result.GetConfiguration(configuration_key=[])
         else:
-            config_list = [{"key": k, "readonly": False, "value": "test_value"} for k in keys]
+            config_list = [
+                {
+                    "key": k,
+                    "readonly": False,
+                    "value": self._config.get(k, "test_value"),
+                }
+                for k in keys
+            ]
             out = call_result.GetConfiguration(configuration_key=config_list)
         record_result(self.results, "GetConfiguration", True, "Received and responded", "server_sent")
         self._notify_server_action("GetConfiguration")
         LOG_ACTION = None
         return out
+
+    @on(Action.change_configuration)
+    def on_change_configuration(self, key: str, value: str, **kwargs) -> call_result.ChangeConfiguration:
+        """OCPP post_connect calls ChangeConfiguration for measurands and meter intervals."""
+        global LOG_ACTION
+        LOG_ACTION = "ChangeConfiguration"
+        self._config[key] = value
+        LOGGER.info(
+            "Received ChangeConfiguration from server; key=%s — responding Accepted.",
+            key,
+        )
+        record_result(self.results, "ChangeConfiguration", True, "Accepted", "server_sent")
+        LOG_ACTION = None
+        return call_result.ChangeConfiguration(status=ConfigurationStatus.accepted)
+
+    @on(Action.trigger_message)
+    def on_trigger_message(self, requested_message, **kwargs) -> call_result.TriggerMessage:
+        """OCPP may send TriggerMessage after connect (BootNotification / StatusNotification)."""
+        global LOG_ACTION
+        LOG_ACTION = "TriggerMessage"
+        LOGGER.info(
+            "Received TriggerMessage from server; requested=%s — responding Accepted.",
+            requested_message,
+        )
+        record_result(self.results, "TriggerMessage", True, "Accepted", "server_sent")
+        LOG_ACTION = None
+        return call_result.TriggerMessage(status=TriggerMessageStatus.accepted)
 
     @on(Action.set_charging_profile)
     def on_set_charging_profile(self, **kwargs) -> call_result.SetChargingProfile:
@@ -227,6 +366,9 @@ class TestChargePoint(CP16Base):
         LOGGER.info("Received RemoteStartTransaction from server; responding Accepted.")
         record_result(self.results, "RemoteStartTransaction", True, "Received and responded", "server_sent")
         self._notify_server_action("RemoteStartTransaction")
+        id_resolved = id_tag or "remote_start"
+        cid = connector_id if connector_id is not None else 1
+        self._schedule_coro(self._begin_session_from_remote_start(id_resolved, cid))
         LOG_ACTION = None
         return call_result.RemoteStartTransaction(RemoteStartStopStatus.accepted)
 
@@ -237,6 +379,7 @@ class TestChargePoint(CP16Base):
         LOGGER.info("Received RemoteStopTransaction from server; responding Accepted.")
         record_result(self.results, "RemoteStopTransaction", True, "Received and responded", "server_sent")
         self._notify_server_action("RemoteStopTransaction")
+        self._schedule_coro(self._end_session_from_remote_stop(transaction_id))
         LOG_ACTION = None
         return call_result.RemoteStopTransaction(RemoteStartStopStatus.accepted)
 
@@ -387,6 +530,7 @@ class TestChargePoint(CP16Base):
             status = resp.id_tag_info.get("status") if resp.id_tag_info else None
             if status == AuthorizationStatus.accepted:
                 record_result(self.results, "StopTransaction", True, "Server accepted")
+                self.active_transaction_id = 0
             else:
                 record_result(self.results, "StopTransaction", False, f"id_tag_info status: {status}")
         except Exception as e:
