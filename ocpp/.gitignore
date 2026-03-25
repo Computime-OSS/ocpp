@@ -134,3 +134,7 @@ dmypy.json
 
 # Broken or machine-specific symlinks (e.g. from devcontainer)
 /ocppmkd
+
+# OCPP capability test — generated per run (pre-commit EOF fixer)
+tests/ocpp_capability_test_results.json
+tests/ocpp_capability_test_report.html

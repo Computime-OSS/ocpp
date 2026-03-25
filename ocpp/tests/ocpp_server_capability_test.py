@@ -18,7 +18,9 @@ sends them (e.g. when triggered from the HA UI).
 Usage:
     python tests/ocpp_server_capability_test.py
 
-Results are stored in tests/ocpp_capability_test_results.json and printed to stdout.
+Results are written to tests/ocpp_capability_test_results.json (machine-readable) and
+tests/ocpp_capability_test_report.html (OCA-style printable report). Summary is printed
+to stdout. Optional env: OCPP_REPORT_ORGANIZATION, OCPP_REPORT_PRODUCT for the report header.
 
 After client-side tests, the script prints instructions for each remaining
 server-initiated action (not GetConfiguration — the CSMS usually sends that
@@ -29,8 +31,11 @@ per step for you to trigger it from the CSMS.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
+import os
+import socket
 import sys
 from collections.abc import Coroutine
 from typing import Any
@@ -57,10 +62,17 @@ from ocpp.v16.enums import (
 # -----------------------------------------------------------------------------
 # Configuration (change here for your server)
 # -----------------------------------------------------------------------------
-TARGET_WS_URL = "ws://127.0.0.1:9000/TEST-002"
-CHARGE_POINT_ID = "TEST-002"
+TARGET_WS_URL = "ws://127.0.0.1:9000/TEST-001"
+CHARGE_POINT_ID = "TEST-001"
 SUBPROTOCOLS = ["ocpp1.6"]
 RESULTS_FILE = Path(__file__).resolve().parent / "ocpp_capability_test_results.json"
+REPORT_HTML_FILE = Path(__file__).resolve().parent / "ocpp_capability_test_report.html"
+# Optional: set OCPP_REPORT_ORGANIZATION / OCPP_REPORT_PRODUCT for the HTML/PDF-style header.
+REPORT_ORGANIZATION = os.environ.get("OCPP_REPORT_ORGANIZATION", "Computime")
+REPORT_PRODUCT_UNDER_TEST = os.environ.get(
+    "OCPP_REPORT_PRODUCT",
+    "Central System (CSMS) — capability verification",
+)
 TEST_TIMEOUT_SECONDS = 60
 # Max wait after each prompt for the server to send that OCPP action (seconds).
 SERVER_ACTION_WAIT_SECONDS = TEST_TIMEOUT_SECONDS
@@ -556,6 +568,312 @@ EXPECTED_ACTIONS = [
     "Heartbeat",
 ]
 
+# Row order in the HTML/JSON report (OCA-style test matrix).
+REPORT_ROW_ORDER: list[str] = [
+    "Connection",
+    "BootNotification",
+    "Authorize",
+    "Heartbeat",
+    "StatusNotification",
+    "MeterValues",
+    "StartTransaction",
+    "StopTransaction",
+    "GetConfiguration",
+    "ChangeConfiguration",
+    "TriggerMessage",
+    "RemoteStartTransaction",
+    "RemoteStopTransaction",
+    "ClearChargingProfile",
+    "SetChargingProfile",
+    "ChangeAvailability",
+]
+
+
+def _sort_results_for_report(rows: list[dict]) -> list[dict]:
+    """Stable order for certificate-style report tables."""
+    idx = {name: i for i, name in enumerate(REPORT_ROW_ORDER)}
+    return sorted(rows, key=lambda r: (idx.get(r["action"], 900), r["action"]))
+
+
+def _result_outcome(row: dict) -> str:
+    """Human-readable outcome matching OCA-style summary columns."""
+    if row.get("passed"):
+        return "Pass"
+    msg = str(row.get("message", ""))
+    if "Not exercised" in msg:
+        return "Not run"
+    return "Fail"
+
+
+def _direction_for_row(row: dict) -> str:
+    """Arrow label for test matrix."""
+    cat = row.get("category", "")
+    if cat == "client_sent":
+        return "Charge Point → CSMS"
+    if cat == "server_sent":
+        return "CSMS → Charge Point"
+    return "—"
+
+
+def build_report_payload(results: list[dict]) -> dict[str, Any]:
+    """Build JSON payload including OCA-style report metadata."""
+    ts = datetime.now(UTC).isoformat()
+    n_pass = sum(1 for r in results if r.get("passed"))
+    n_fail = sum(1 for r in results if not r.get("passed") and _result_outcome(r) == "Fail")
+    n_not_run = sum(1 for r in results if not r.get("passed") and _result_outcome(r) == "Not run")
+    total = len(results)
+    pct = round(100.0 * n_pass / total, 1) if total else 0.0
+    return {
+        "report_metadata": {
+            "document_title": "OCPP 1.6 — Central System Capability Test Report",
+            "document_subtitle": "Internal verification",
+            "standard_reference": "OCPP 1.6, JSON over WebSocket",
+            "organization": REPORT_ORGANIZATION,
+            "product_under_test": REPORT_PRODUCT_UNDER_TEST,
+            "certificate_style_note": (
+                "This report is conducted internally by Computime."
+            ),
+            "generated_at_utc": ts,
+            "host": socket.gethostname(),
+        },
+        "test_configuration": {
+            "target_url": TARGET_WS_URL,
+            "charge_point_identity": CHARGE_POINT_ID,
+            "subprotocols": SUBPROTOCOLS,
+            "server_action_wait_seconds_per_prompt": SERVER_ACTION_WAIT_SECONDS,
+        },
+        "timestamp_utc": ts,
+        "target_url": TARGET_WS_URL,
+        "charge_point_id": CHARGE_POINT_ID,
+        "results": results,
+        "summary": {
+            "total": total,
+            "passed": n_pass,
+            "failed": n_fail,
+            "not_run": n_not_run,
+            "pass_rate_percent": pct,
+        },
+    }
+
+
+def _render_html_report(payload: dict[str, Any]) -> str:
+    """Generate self-contained HTML (print-friendly) in OCA certificate-style sections."""
+    meta = payload["report_metadata"]
+    cfg = payload["test_configuration"]
+    summ = payload["summary"]
+    rows = _sort_results_for_report(list(payload["results"]))
+
+    def esc(s: Any) -> str:
+        return html.escape(str(s), quote=True)
+
+    # Test case IDs (TC-CAP-*) for matrix readability.
+    tc_rows: list[tuple[str, dict]] = []
+    for i, row in enumerate(rows, start=1):
+        tc_id = f"TC-CAP-{i:03d}"
+        tc_rows.append((tc_id, row))
+
+    outcome_class = {"Pass": "pass", "Fail": "fail", "Not run": "not-run"}
+
+    table_rows = "".join(
+        f"<tr>"
+        f"<td>{esc(tc_id)}</td>"
+        f"<td><code>{esc(r['action'])}</code></td>"
+        f"<td>{esc(_direction_for_row(r))}</td>"
+        f"<td class=\"outcome-{outcome_class[_result_outcome(r)]}\">"
+        f"{esc(_result_outcome(r))}</td>"
+        f"<td>{esc(r.get('message', ''))}</td>"
+        f"</tr>"
+        for tc_id, r in tc_rows
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{esc(meta['document_title'])}</title>
+  <style>
+    :root {{
+      --ink: #1a2b3c;
+      --muted: #5a6b7c;
+      --border: #c5d0d8;
+      --ok: #0d6e3a;
+      --bad: #a61b1b;
+      --skip: #8a6d3b;
+      --band: #0f3d5c;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      line-height: 1.45;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px 20px 48px;
+      background: #f7f9fa;
+    }}
+    .sheet {{
+      background: #fff;
+      border: 1px solid var(--border);
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+    }}
+    .header-band {{
+      background: var(--band);
+      color: #fff;
+      padding: 20px 24px;
+    }}
+    .header-band h1 {{
+      margin: 0 0 8px;
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: .02em;
+    }}
+    .header-band .sub {{
+      margin: 0;
+      font-size: 0.95rem;
+      opacity: 0.92;
+    }}
+    .section {{
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+    }}
+    .section:last-child {{ border-bottom: none; }}
+    h2 {{
+      font-size: 1.05rem;
+      margin: 0 0 12px;
+      color: var(--band);
+      font-weight: 600;
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 6px;
+    }}
+    .meta-grid {{
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 6px 16px;
+      font-size: 0.92rem;
+    }}
+    .meta-grid dt {{ color: var(--muted); margin: 0; }}
+    .meta-grid dd {{ margin: 0; }}
+    .summary-box {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 28px;
+      font-size: 0.95rem;
+    }}
+    .summary-box strong {{ color: var(--band); }}
+    .outcome-pass {{ color: var(--ok); font-weight: 600; }}
+    .outcome-fail {{ color: var(--bad); font-weight: 600; }}
+    .outcome-not-run {{ color: var(--skip); font-weight: 600; }}
+    table.matrix {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }}
+    table.matrix th, table.matrix td {{
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }}
+    table.matrix th {{
+      background: #eef3f6;
+      font-weight: 600;
+    }}
+    table.matrix code {{ font-size: 0.9em; }}
+    .disclaimer {{
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }}
+    .footer-line {{
+      margin-top: 8px;
+      font-size: 0.75rem;
+      color: #8899aa;
+    }}
+    @media print {{
+      body {{ background: #fff; }}
+      .sheet {{ box-shadow: none; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <header class="header-band">
+      <h1>{esc(meta['document_title'])}</h1>
+      <p class="sub">{esc(meta['document_subtitle'])}</p>
+    </header>
+
+    <section class="section">
+      <h2>Abstract — test configuration</h2>
+      <dl class="meta-grid">
+        <dt>Standard / profile</dt>
+        <dd>{esc(meta['standard_reference'])}</dd>
+        <dt>Organization</dt>
+        <dd>{esc(meta['organization'])}</dd>
+        <dt>Product under test</dt>
+        <dd>{esc(meta['product_under_test'])}</dd>
+        <dt>Report generated (UTC)</dt>
+        <dd>{esc(meta['generated_at_utc'])}</dd>
+        <dt>Host</dt>
+        <dd>{esc(meta['host'])}</dd>
+        <dt>WebSocket URL</dt>
+        <dd><code>{esc(cfg['target_url'])}</code></dd>
+        <dt>Charge point identity</dt>
+        <dd><code>{esc(cfg['charge_point_identity'])}</code></dd>
+        <dt>Subprotocols</dt>
+        <dd>{esc(", ".join(cfg['subprotocols']))}</dd>
+        <dt>Server-action prompt timeout</dt>
+        <dd>{esc(cfg['server_action_wait_seconds_per_prompt'])} s</dd>
+      </dl>
+    </section>
+
+    <section class="section">
+      <h2>Test result summary</h2>
+      <div class="summary-box">
+        <span><strong>Total</strong> {esc(summ['total'])}</span>
+        <span class="outcome-pass"><strong>Pass</strong> {esc(summ['passed'])}</span>
+        <span class="outcome-fail"><strong>Fail</strong> {esc(summ['failed'])}</span>
+        <span class="outcome-not-run"><strong>Not run</strong> {esc(summ['not_run'])}</span>
+        <span><strong>Pass rate</strong> {esc(summ['pass_rate_percent'])}%</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Detailed test results</h2>
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>Test case</th>
+            <th>OCPP action</th>
+            <th>Direction</th>
+            <th>Result</th>
+            <th>Remarks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table_rows}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section disclaimer">
+      <p><strong>Note.</strong> {esc(meta['certificate_style_note'])}</p>
+      <p class="footer-line">
+        Layout inspired by Open Charge Alliance certificate abstracts for readability.
+        This tool exercises a subset of OCPP 1.6 flows available in your environment.
+      </p>
+    </section>
+  </div>
+</body>
+</html>
+"""
+
+
+def write_html_report(payload: dict[str, Any], path: Path) -> None:
+    """Write the OCA-style HTML report."""
+    path.write_text(_render_html_report(payload) + "\n", encoding="utf-8")
+    LOGGER.info("HTML report written to %s", path)
+
 
 def ensure_results_for_expected(results: list[dict]) -> None:
     """Add 'not_run' entries for expected actions that have no result."""
@@ -570,41 +888,42 @@ def ensure_results_for_expected(results: list[dict]) -> None:
             })
 
 
-def save_results(results: list[dict], path: Path) -> None:
-    """Write results and metadata to JSON file."""
-    payload = {
-        "timestamp_utc": datetime.now(UTC).isoformat(),
-        "target_url": TARGET_WS_URL,
-        "charge_point_id": CHARGE_POINT_ID,
-        "results": results,
-        "summary": {
-            "total": len(results),
-            "passed": sum(1 for r in results if r["passed"]),
-            "failed": sum(1 for r in results if not r["passed"]),
-        },
-    }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+def save_results(results: list[dict], path: Path) -> dict[str, Any]:
+    """Write results and metadata to JSON file (OCA-style payload). Returns payload for HTML."""
+    payload = build_report_payload(results)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     LOGGER.info("Results written to %s", path)
+    return payload
 
 
 def print_summary(results: list[dict]) -> None:
     """Print human-readable summary to stdout."""
     passed = [r for r in results if r["passed"]]
     failed = [r for r in results if not r["passed"]]
+    fail_only = [r for r in failed if _result_outcome(r) == "Fail"]
+    not_run = [r for r in failed if _result_outcome(r) == "Not run"]
     print("\n" + "=" * 60)
     print("OCPP 1.6 Server Capability Test Summary")
     print("=" * 60)
     print(f"Target: {TARGET_WS_URL}")
-    print(f"Total:  {len(results)}  |  Passed: {len(passed)}  |  Failed: {len(failed)}")
+    print(
+        f"Total:  {len(results)}  |  Passed: {len(passed)}  |  "
+        f"Failed: {len(fail_only)}  |  Not run: {len(not_run)}",
+    )
+    print(f"HTML report: {REPORT_HTML_FILE}")
     print("-" * 60)
     if passed:
         print("PASSED:")
         for r in passed:
             print(f"  - {r['action']}: {r.get('message', 'OK')}")
-    if failed:
-        print("FAILED / NOT RUN:")
-        for r in failed:
+    if fail_only:
+        print("FAILED:")
+        for r in fail_only:
             print(f"  - {r['action']}: {r.get('message', 'Failed')}")
+    if not_run:
+        print("NOT RUN:")
+        for r in not_run:
+            print(f"  - {r['action']}: {r.get('message', '')}")
     print("=" * 60)
 
 
@@ -748,15 +1067,17 @@ def main() -> int:
     """Entry point: run tests, store results, print summary."""
     print("OCPP 1.6 Server Capability Test")
     print("Target URL (hardcoded):", TARGET_WS_URL)
-    print("Results file:", RESULTS_FILE)
+    print("JSON results:", RESULTS_FILE)
+    print("HTML report:", REPORT_HTML_FILE)
     print()
 
     results = asyncio.run(run_tests())
-    save_results(results, RESULTS_FILE)
+    payload = save_results(results, RESULTS_FILE)
+    write_html_report(payload, REPORT_HTML_FILE)
     print_summary(results)
 
-    failed = sum(1 for r in results if not r["passed"])
-    return 1 if failed > 0 else 0
+    fail_count = sum(1 for r in results if not r["passed"] and _result_outcome(r) == "Fail")
+    return 1 if fail_count > 0 else 0
 
 
 if __name__ == "__main__":
