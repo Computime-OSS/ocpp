@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Standalone OCPP 1.6 server capability test script.
 
 Tests the OCPP Central System (server) by acting as a charge point client.
@@ -16,12 +15,15 @@ Usage:
     python tests/ocpp_server_capability_test.py
 
 Results are stored in tests/ocpp_capability_test_results.json and printed to stdout.
+
+After client-side tests, the script prints instructions for each server-initiated
+action in sequence (RemoteStartTransaction, RemoteStopTransaction, etc.) and
+waits up to SERVER_ACTION_WAIT_SECONDS for the CSMS to send each message.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import sys
@@ -51,6 +53,46 @@ CHARGE_POINT_ID = "CP_001"
 SUBPROTOCOLS = ["ocpp1.6"]
 RESULTS_FILE = Path(__file__).resolve().parent / "ocpp_capability_test_results.json"
 TEST_TIMEOUT_SECONDS = 60
+# Max wait after each prompt for the server to send that OCPP action (seconds).
+SERVER_ACTION_WAIT_SECONDS = TEST_TIMEOUT_SECONDS
+
+# After client tests: prompt and wait (in order) for these server-initiated calls.
+# Actions already received earlier (e.g. GetConfiguration on connect) are skipped.
+SERVER_PROMPT_SEQUENCE: list[str] = [
+    "RemoteStartTransaction",
+    "RemoteStopTransaction",
+    "ClearChargingProfile",
+    "ChangeAvailability",
+    "GetConfiguration",
+    "SetChargingProfile",
+]
+
+SERVER_ACTION_USER_INSTRUCTIONS: dict[str, str] = {
+    "RemoteStartTransaction": (
+        "In your CSMS (e.g. Home Assistant OCPP), trigger remote start / "
+        "RemoteStartTransaction for this charge point (connector 1 if asked)."
+    ),
+    "RemoteStopTransaction": (
+        "In your CSMS, trigger remote stop / RemoteStopTransaction for the active "
+        "charging session on this charge point."
+    ),
+    "ClearChargingProfile": (
+        "In your CSMS, send ClearChargingProfile for this charge point (connector 1 "
+        "or as your UI allows)."
+    ),
+    "ChangeAvailability": (
+        "In your CSMS, send ChangeAvailability (e.g. Operative/Inoperative) for "
+        "this charge point or a connector."
+    ),
+    "GetConfiguration": (
+        "In your CSMS, request configuration / send GetConfiguration for this "
+        "charge point (if your UI exposes it)."
+    ),
+    "SetChargingProfile": (
+        "In your CSMS, set a charging profile / send SetChargingProfile for this "
+        "charge point."
+    ),
+}
 
 # -----------------------------------------------------------------------------
 # Logging: prefix each line with [TEST: <action>] when testing that action
@@ -92,15 +134,33 @@ def record_result(
     message: str = "",
     category: str = "client_sent",
 ) -> None:
-    """Append one test result. category: 'client_sent' | 'server_sent'."""
-    results.append(
-        {
-            "action": action,
-            "passed": passed,
-            "message": message,
-            "category": category,
-        }
-    )
+    """Record or merge one test result by action (one row per test type).
+
+    If the same OCPP action is exercised more than once (e.g. server sends
+    GetConfiguration twice), update the existing row instead of appending so
+    totals and the JSON report do not double-count. Pass status is merged with
+    OR: any successful attempt marks the action passed. On first failure then
+    success, message updates to the success text; a later failure does not
+    clear a prior pass.
+    category: 'client_sent' | 'server_sent' (kept from first record for that action).
+    """
+    for row in results:
+        if row["action"] == action:
+            prev_passed = row["passed"]
+            row["passed"] = prev_passed or passed
+            if passed and not prev_passed:
+                row["message"] = message
+            elif passed and prev_passed:
+                pass  # keep first success message
+            elif not row["passed"]:
+                row["message"] = message
+            return
+    results.append({
+        "action": action,
+        "passed": passed,
+        "message": message,
+        "category": category,
+    })
 
 
 # -----------------------------------------------------------------------------
@@ -109,21 +169,23 @@ def record_result(
 class TestChargePoint(CP16Base):
     """OCPP 1.6 charge point client that records server capability test results."""
 
-    def __init__(
-        self,
-        charge_point_id: str,
-        websocket: websockets.WebSocketClientProtocol,
-        results: list[dict],
-    ):
+    def __init__(self, charge_point_id: str, websocket: websockets.WebSocketClientProtocol, results: list[dict]):
         super().__init__(charge_point_id, websocket)
         self.results = results
         self.active_transaction_id: int = 0
+        self._server_action_events: dict[str, asyncio.Event] = {
+            k: asyncio.Event() for k in SERVER_ACTION_USER_INSTRUCTIONS
+        }
+
+    def _notify_server_action(self, action: str) -> None:
+        """Signal waiters that this server-initiated action was handled."""
+        ev = self._server_action_events.get(action)
+        if ev is not None:
+            ev.set()
 
     # ----- Server-initiated: record when we receive and respond -----
     @on(Action.get_configuration)
-    def on_get_configuration(
-        self, key: list[str] | None = None, **kwargs
-    ) -> call_result.GetConfiguration:
+    def on_get_configuration(self, key: list[str] | None = None, **kwargs) -> call_result.GetConfiguration:
         global LOG_ACTION
         LOG_ACTION = "GetConfiguration"
         LOGGER.info("Received GetConfiguration from server; responding.")
@@ -131,17 +193,10 @@ class TestChargePoint(CP16Base):
         if not keys:
             out = call_result.GetConfiguration(configuration_key=[])
         else:
-            config_list = [
-                {"key": k, "readonly": False, "value": "test_value"} for k in keys
-            ]
+            config_list = [{"key": k, "readonly": False, "value": "test_value"} for k in keys]
             out = call_result.GetConfiguration(configuration_key=config_list)
-        record_result(
-            self.results,
-            "GetConfiguration",
-            True,
-            "Received and responded",
-            "server_sent",
-        )
+        record_result(self.results, "GetConfiguration", True, "Received and responded", "server_sent")
+        self._notify_server_action("GetConfiguration")
         LOG_ACTION = None
         return out
 
@@ -150,13 +205,8 @@ class TestChargePoint(CP16Base):
         global LOG_ACTION
         LOG_ACTION = "SetChargingProfile"
         LOGGER.info("Received SetChargingProfile from server; responding Accepted.")
-        record_result(
-            self.results,
-            "SetChargingProfile",
-            True,
-            "Received and responded",
-            "server_sent",
-        )
+        record_result(self.results, "SetChargingProfile", True, "Received and responded", "server_sent")
+        self._notify_server_action("SetChargingProfile")
         LOG_ACTION = None
         return call_result.SetChargingProfile(ChargingProfileStatus.accepted)
 
@@ -165,64 +215,38 @@ class TestChargePoint(CP16Base):
         global LOG_ACTION
         LOG_ACTION = "ClearChargingProfile"
         LOGGER.info("Received ClearChargingProfile from server; responding Accepted.")
-        record_result(
-            self.results,
-            "ClearChargingProfile",
-            True,
-            "Received and responded",
-            "server_sent",
-        )
+        record_result(self.results, "ClearChargingProfile", True, "Received and responded", "server_sent")
+        self._notify_server_action("ClearChargingProfile")
         LOG_ACTION = None
         return call_result.ClearChargingProfile(ClearChargingProfileStatus.accepted)
 
     @on(Action.remote_start_transaction)
-    def on_remote_start_transaction(
-        self, id_tag: str | None = None, connector_id: int | None = None, **kwargs
-    ) -> call_result.RemoteStartTransaction:
+    def on_remote_start_transaction(self, id_tag: str | None = None, connector_id: int | None = None, **kwargs) -> call_result.RemoteStartTransaction:
         global LOG_ACTION
         LOG_ACTION = "RemoteStartTransaction"
         LOGGER.info("Received RemoteStartTransaction from server; responding Accepted.")
-        record_result(
-            self.results,
-            "RemoteStartTransaction",
-            True,
-            "Received and responded",
-            "server_sent",
-        )
+        record_result(self.results, "RemoteStartTransaction", True, "Received and responded", "server_sent")
+        self._notify_server_action("RemoteStartTransaction")
         LOG_ACTION = None
         return call_result.RemoteStartTransaction(RemoteStartStopStatus.accepted)
 
     @on(Action.remote_stop_transaction)
-    def on_remote_stop_transaction(
-        self, transaction_id: int | None = None, **kwargs
-    ) -> call_result.RemoteStopTransaction:
+    def on_remote_stop_transaction(self, transaction_id: int | None = None, **kwargs) -> call_result.RemoteStopTransaction:
         global LOG_ACTION
         LOG_ACTION = "RemoteStopTransaction"
         LOGGER.info("Received RemoteStopTransaction from server; responding Accepted.")
-        record_result(
-            self.results,
-            "RemoteStopTransaction",
-            True,
-            "Received and responded",
-            "server_sent",
-        )
+        record_result(self.results, "RemoteStopTransaction", True, "Received and responded", "server_sent")
+        self._notify_server_action("RemoteStopTransaction")
         LOG_ACTION = None
         return call_result.RemoteStopTransaction(RemoteStartStopStatus.accepted)
 
     @on(Action.change_availability)
-    def on_change_availability(
-        self, connector_id: int | None = None, type: str | None = None, **kwargs
-    ) -> call_result.ChangeAvailability:
+    def on_change_availability(self, connector_id: int | None = None, type: str | None = None, **kwargs) -> call_result.ChangeAvailability:
         global LOG_ACTION
         LOG_ACTION = "ChangeAvailability"
         LOGGER.info("Received ChangeAvailability from server; responding Accepted.")
-        record_result(
-            self.results,
-            "ChangeAvailability",
-            True,
-            "Received and responded",
-            "server_sent",
-        )
+        record_result(self.results, "ChangeAvailability", True, "Received and responded", "server_sent")
+        self._notify_server_action("ChangeAvailability")
         LOG_ACTION = None
         return call_result.ChangeAvailability(AvailabilityStatus.accepted)
 
@@ -240,12 +264,7 @@ class TestChargePoint(CP16Base):
             if resp.status == RegistrationStatus.accepted:
                 record_result(self.results, "BootNotification", True, "Server accepted")
             else:
-                record_result(
-                    self.results,
-                    "BootNotification",
-                    False,
-                    f"Server status: {resp.status}",
-                )
+                record_result(self.results, "BootNotification", False, f"Server status: {resp.status}")
         except Exception as e:
             LOGGER.exception("BootNotification failed")
             record_result(self.results, "BootNotification", False, str(e))
@@ -262,9 +281,7 @@ class TestChargePoint(CP16Base):
             if status == AuthorizationStatus.accepted:
                 record_result(self.results, "Authorize", True, "Server accepted")
             else:
-                record_result(
-                    self.results, "Authorize", False, f"id_tag_info status: {status}"
-                )
+                record_result(self.results, "Authorize", False, f"id_tag_info status: {status}")
         except Exception as e:
             LOGGER.exception("Authorize failed")
             record_result(self.results, "Authorize", False, str(e))
@@ -278,9 +295,7 @@ class TestChargePoint(CP16Base):
             req = call.Heartbeat()
             resp = await self.call(req)
             if resp.current_time:
-                record_result(
-                    self.results, "Heartbeat", True, "Server returned currentTime"
-                )
+                record_result(self.results, "Heartbeat", True, "Server returned currentTime")
             else:
                 record_result(self.results, "Heartbeat", False, "Missing currentTime")
         except Exception as e:
@@ -318,18 +333,8 @@ class TestChargePoint(CP16Base):
                     {
                         "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "sampledValue": [
-                            {
-                                "value": "1000",
-                                "context": "Sample.Periodic",
-                                "measurand": "Energy.Active.Import.Register",
-                                "unit": "Wh",
-                            },
-                            {
-                                "value": "0",
-                                "context": "Sample.Periodic",
-                                "measurand": "Current.Import",
-                                "unit": "A",
-                            },
+                            {"value": "1000", "context": "Sample.Periodic", "measurand": "Energy.Active.Import.Register", "unit": "Wh"},
+                            {"value": "0", "context": "Sample.Periodic", "measurand": "Current.Import", "unit": "A"},
                         ],
                     }
                 ],
@@ -357,19 +362,9 @@ class TestChargePoint(CP16Base):
             self.active_transaction_id = resp.transaction_id
             status = resp.id_tag_info.get("status") if resp.id_tag_info else None
             if status == AuthorizationStatus.accepted:
-                record_result(
-                    self.results,
-                    "StartTransaction",
-                    True,
-                    f"transaction_id={resp.transaction_id}",
-                )
+                record_result(self.results, "StartTransaction", True, f"transaction_id={resp.transaction_id}")
             else:
-                record_result(
-                    self.results,
-                    "StartTransaction",
-                    False,
-                    f"id_tag_info status: {status}",
-                )
+                record_result(self.results, "StartTransaction", False, f"id_tag_info status: {status}")
         except Exception as e:
             LOGGER.exception("StartTransaction failed")
             record_result(self.results, "StartTransaction", False, str(e))
@@ -393,12 +388,7 @@ class TestChargePoint(CP16Base):
             if status == AuthorizationStatus.accepted:
                 record_result(self.results, "StopTransaction", True, "Server accepted")
             else:
-                record_result(
-                    self.results,
-                    "StopTransaction",
-                    False,
-                    f"id_tag_info status: {status}",
-                )
+                record_result(self.results, "StopTransaction", False, f"id_tag_info status: {status}")
         except Exception as e:
             LOGGER.exception("StopTransaction failed")
             record_result(self.results, "StopTransaction", False, str(e))
@@ -428,23 +418,12 @@ def ensure_results_for_expected(results: list[dict]) -> None:
     seen = {r["action"] for r in results}
     for action in EXPECTED_ACTIONS:
         if action not in seen:
-            results.append(
-                {
-                    "action": action,
-                    "passed": False,
-                    "message": "Not exercised during test (server did not send or test did not run)",
-                    "category": "client_sent"
-                    if action
-                    in (
-                        "Authorize",
-                        "BootNotification",
-                        "Heartbeat",
-                        "MeterValues",
-                        "StatusNotification",
-                    )
-                    else "server_sent",
-                }
-            )
+            results.append({
+                "action": action,
+                "passed": False,
+                "message": "Not exercised during test (server did not send or test did not run)",
+                "category": "client_sent" if action in ("Authorize", "BootNotification", "Heartbeat", "MeterValues", "StatusNotification") else "server_sent",
+            })
 
 
 def save_results(results: list[dict], path: Path) -> None:
@@ -465,24 +444,102 @@ def save_results(results: list[dict], path: Path) -> None:
 
 
 def print_summary(results: list[dict]) -> None:
-    """Print human-readable summary to stdout via logger."""
+    """Print human-readable summary to stdout."""
     passed = [r for r in results if r["passed"]]
     failed = [r for r in results if not r["passed"]]
-    LOGGER.info("\n" + "=" * 60)
-    LOGGER.info("OCPP 1.6 Server Capability Test Summary")
-    LOGGER.info("=" * 60)
-    LOGGER.info("Target: %s", TARGET_WS_URL)
-    LOGGER.info("Total:  %s  |  Passed: %s  |  Failed: %s", len(results), len(passed), len(failed))
-    LOGGER.info("-" * 60)
+    print("\n" + "=" * 60)
+    print("OCPP 1.6 Server Capability Test Summary")
+    print("=" * 60)
+    print(f"Target: {TARGET_WS_URL}")
+    print(f"Total:  {len(results)}  |  Passed: {len(passed)}  |  Failed: {len(failed)}")
+    print("-" * 60)
     if passed:
-        LOGGER.info("PASSED:")
+        print("PASSED:")
         for r in passed:
-            LOGGER.info("  - %s: %s", r["action"], r.get("message", "OK"))
+            print(f"  - {r['action']}: {r.get('message', 'OK')}")
     if failed:
-        LOGGER.info("FAILED / NOT RUN:")
+        print("FAILED / NOT RUN:")
         for r in failed:
-            LOGGER.info("  - %s: %s", r["action"], r.get("message", "Failed"))
-    LOGGER.info("=" * 60)
+            print(f"  - {r['action']}: {r.get('message', 'Failed')}")
+    print("=" * 60)
+
+
+def _has_passing_result(results: list[dict], action: str) -> bool:
+    """Return True if this action already has a passing row."""
+    return any(r["action"] == action and r["passed"] for r in results)
+
+
+async def wait_for_prompted_server_action(
+    cp: TestChargePoint,
+    action: str,
+    results: list[dict],
+    timeout_sec: float,
+) -> bool:
+    """Wait up to timeout_sec for the CSMS to send this call; record failure on timeout."""
+    if _has_passing_result(results, action):
+        LOGGER.info("Server action %s already completed earlier; skipping wait.", action)
+        return True
+    ev = cp._server_action_events.get(action)
+    if ev is None:
+        record_result(
+            results,
+            action,
+            False,
+            f"Internal: unknown server action {action}",
+            "server_sent",
+        )
+        return False
+    try:
+        await asyncio.wait_for(ev.wait(), timeout=timeout_sec)
+        return True
+    except TimeoutError:
+        record_result(
+            results,
+            action,
+            False,
+            f"No {action} from server within {timeout_sec:.0f}s",
+            "server_sent",
+        )
+        return False
+
+
+def print_server_action_prompt(action: str, index: int, total: int) -> None:
+    """Print instructions for the operator before waiting for a server-initiated call."""
+    line = SERVER_ACTION_USER_INSTRUCTIONS.get(
+        action,
+        f"In your CSMS, trigger {action} for this charge point.",
+    )
+    print()
+    print("=" * 60)
+    print(f"Server-initiated test {index}/{total}: {action}")
+    print("-" * 60)
+    print(line)
+    print(
+        f"You have up to {SERVER_ACTION_WAIT_SECONDS} seconds for the server to send this call.",
+    )
+    print("=" * 60)
+    sys.stdout.flush()
+
+
+async def run_prompted_server_tests(cp: TestChargePoint, results: list[dict]) -> None:
+    """After client tests: prompt and wait (sequentially) for each server-initiated action."""
+    total = len(SERVER_PROMPT_SEQUENCE)
+    for i, action in enumerate(SERVER_PROMPT_SEQUENCE, start=1):
+        if _has_passing_result(results, action):
+            print()
+            print(
+                f"[{action}] Already received from server earlier — skipping ({i}/{total}).",
+            )
+            sys.stdout.flush()
+            LOGGER.info("Skipping prompted wait for %s (already passed).", action)
+            continue
+        print_server_action_prompt(action, i, total)
+        await wait_for_prompted_server_action(
+            cp,
+            action,
+            results,
+            SERVER_ACTION_WAIT_SECONDS,
+        )
 
 
 async def run_tests() -> list[dict]:
@@ -518,12 +575,23 @@ async def run_tests() -> list[dict]:
             await asyncio.sleep(0.2)
             await cp.test_stop_transaction()
 
-            # Allow more time for server-initiated messages (e.g. TriggerMessage, SetChargingProfile)
-            await asyncio.sleep(2.0)
+            print()
+            print("=" * 60)
+            print("Client-side tests finished.")
+            print(
+                "Next: server-initiated tests — follow each prompt and use your CSMS within "
+                f"{SERVER_ACTION_WAIT_SECONDS}s per step.",
+            )
+            print("=" * 60)
+            sys.stdout.flush()
+
+            await run_prompted_server_tests(cp, results)
 
             runner.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await runner
+            except asyncio.CancelledError:
+                pass
     except Exception as e:
         LOGGER.exception("Connection or test run failed")
         record_result(results, "Connection", False, str(e), "client_sent")
@@ -534,10 +602,10 @@ async def run_tests() -> list[dict]:
 
 def main() -> int:
     """Entry point: run tests, store results, print summary."""
-    LOGGER.info("OCPP 1.6 Server Capability Test")
-    LOGGER.info("Target URL (hardcoded): %s", TARGET_WS_URL)
-    LOGGER.info("Results file: %s", RESULTS_FILE)
-    LOGGER.info("")
+    print("OCPP 1.6 Server Capability Test")
+    print("Target URL (hardcoded):", TARGET_WS_URL)
+    print("Results file:", RESULTS_FILE)
+    print()
 
     results = asyncio.run(run_tests())
     save_results(results, RESULTS_FILE)
