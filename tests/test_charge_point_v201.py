@@ -877,7 +877,7 @@ async def _test_services(hass: HomeAssistant, cs: CentralSystem, cp: ChargePoint
         hass, cs, cp, "does not compute", "17"
     )
     assert error is not None
-    assert str(error) == "Invalid OCPP key"
+    assert str(error).startswith("Invalid OCPP key")
 
     service_response, error = await _get_variable(
         hass, cs, cp, "SampledDataCtrlr/TxUpdatedInterval"

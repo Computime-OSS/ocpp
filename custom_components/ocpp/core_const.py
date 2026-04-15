@@ -38,6 +38,10 @@ CONF_PASSWORD = "password"
 CONF_PORT = "port"
 CONF_SKIP_SCHEMA_VALIDATION = "skip_schema_validation"
 CONF_FORCE_SMART_CHARGING = "force_smart_charging"
+# Optional YAML (domain config): enable policy engine; providers via PlatformAdapter
+CONF_SMART_CHARGING_POLICY_ENABLED = "smart_charging_policy_enabled"
+# Optional: entity_id whose state is max charge current (A) for site/grid (e.g. IAMMETER)
+CONF_SMART_CHARGING_GRID_MAX_AMPS_ENTITY = "smart_charging_grid_max_amps_entity"
 CONF_SSL = "ssl"
 CONF_SSL_CERTFILE_PATH = "ssl_certfile_path"
 CONF_SSL_KEYFILE_PATH = "ssl_keyfile_path"

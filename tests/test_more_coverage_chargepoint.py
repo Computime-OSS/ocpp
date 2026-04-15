@@ -142,6 +142,12 @@ async def test_run_handles_timeout_and_other_exception(
     hass, socket_enabled, cp_id, port, setup_config_entry, monkeypatch
 ):
     """Covers 537 and 540–541: run() swallows TimeoutError and logs other exceptions, then stops."""
+    # Avoid a long-lived monitor_connection task (ping loop); this test targets run() only.
+    async def noop_monitor(self):
+        return
+
+    monkeypatch.setattr(BaseCP, "monitor_connection", noop_monitor)
+
     cs = setup_config_entry
     async with websockets.connect(
         f"ws://127.0.0.1:{port}/{cp_id}", subprotocols=["ocpp1.6"]
@@ -193,7 +199,14 @@ async def test_run_handles_timeout_and_other_exception(
 async def test_update_returns_early_when_root_device_missing(
     hass, socket_enabled, cp_id, port, setup_config_entry, monkeypatch
 ):
-    """Covers 602: update() returns early if the root device cannot be found in the device registry."""
+    """update() delegates to adapter.signal_state_changed; empty refresh if no root device."""
+    async def noop_monitor(self):
+        return
+
+    monkeypatch.setattr(BaseCP, "monitor_connection", noop_monitor)
+
+    import custom_components.ocpp.platform_adapter as pa_mod
+
     cs = setup_config_entry
     async with websockets.connect(
         f"ws://127.0.0.1:{port}/{cp_id}", subprotocols=["ocpp1.6"]
@@ -205,11 +218,8 @@ async def test_update_returns_early_when_root_device_missing(
             await wait_ready(cs.charge_points[cp_id])
             srv = cs.charge_points[cp_id]
 
-            # Fake registries: no device returned.
-            import custom_components.ocpp.chargepoint as mod
-
             class FakeDR:
-                """Fake DR."""
+                """Registry with no device for OCPP identifiers."""
 
                 def async_get_device(self, identifiers):
                     return None
@@ -219,7 +229,6 @@ async def test_update_returns_early_when_root_device_missing(
 
                 @property
                 def devices(self):
-                    """Fake devices."""
                     return {}
 
                 def async_update_device(self, *args, **kwargs):
@@ -229,35 +238,39 @@ async def test_update_returns_early_when_root_device_missing(
                     return SimpleNamespace(id="dummy")
 
             class FakeER:
-                """Fake ER."""
-
                 def async_clear_config_entry(self, config_entry_id):
                     return None
 
+            dispatched: list = []
+
             def fake_entries_for_device(_er, _dev_id):
-                # No entities to update; the loop is exercised anyway.
                 return []
 
-            # Patch HA helpers & dispatcher.
             monkeypatch.setattr(
-                mod.device_registry, "async_get", lambda _: FakeDR(), raising=True
+                pa_mod.device_registry, "async_get", lambda _: FakeDR(), raising=True
             )
             monkeypatch.setattr(
-                mod.entity_registry, "async_get", lambda _: FakeER(), raising=True
+                pa_mod.entity_registry, "async_get", lambda _: FakeER(), raising=True
             )
-
             monkeypatch.setattr(
-                mod.entity_registry,
+                pa_mod.entity_registry,
                 "async_entries_for_device",
                 fake_entries_for_device,
                 raising=True,
             )
+
+            def capture_dispatch(*args, **kw):
+                dispatched.append((args, kw))
+
             monkeypatch.setattr(
-                mod, "async_dispatcher_send", lambda *args, **kw: None, raising=True
+                pa_mod, "async_dispatcher_send", capture_dispatch, raising=True
             )
 
-            # Should exit early without error (L602).
             await srv.update(srv.settings.cpid)
+
+            assert dispatched, "signal_state_changed should dispatch"
+            _args, _kw = dispatched[-1]
+            assert _args[2] == set()
         finally:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -276,7 +289,14 @@ async def test_update_returns_early_when_root_device_missing(
 async def test_update_traverses_children_and_skips_visited(
     hass, socket_enabled, cp_id, port, setup_config_entry, monkeypatch
 ):
-    """Covers 612 and 623–624: skips already visited IDs and appends children discovered via via_device_id."""
+    """get_entity_ids_to_refresh skips visited devices; duplicate graph edges are ignored."""
+    async def noop_monitor(self):
+        return
+
+    monkeypatch.setattr(BaseCP, "monitor_connection", noop_monitor)
+
+    import custom_components.ocpp.platform_adapter as pa_mod
+
     cs = setup_config_entry
     async with websockets.connect(
         f"ws://127.0.0.1:{port}/{cp_id}", subprotocols=["ocpp1.6"]
@@ -288,13 +308,7 @@ async def test_update_traverses_children_and_skips_visited(
             await wait_ready(cs.charge_points[cp_id])
             srv = cs.charge_points[cp_id]
 
-            # Build a tiny fake device graph:
-            # root -> child (twice in the values() list to create a duplicate push)
-            import custom_components.ocpp.chargepoint as mod
-
             class Dev:
-                """Fake Dev."""
-
                 def __init__(self, id, via=None):
                     self.id = id
                     self.via_device_id = via
@@ -303,8 +317,6 @@ async def test_update_traverses_children_and_skips_visited(
             child = Dev("child", via="root")
 
             class FakeDR:
-                """Fake DR."""
-
                 def async_clear_config_entry(self, config_entry_id):
                     return None
 
@@ -319,7 +331,6 @@ async def test_update_traverses_children_and_skips_visited(
 
                 @property
                 def devices(self):
-                    # Duplicate the child to force the same ID to be appended twice -> will hit continue (L612)
                     class Container:
                         def values(self_inner):
                             return [root, child, child]
@@ -327,34 +338,28 @@ async def test_update_traverses_children_and_skips_visited(
                     return Container()
 
             class FakeER:
-                """Fake ER."""
-
                 def async_clear_config_entry(self, config_entry_id):
                     return None
 
             def fake_entries_for_device(_er, _dev_id):
-                # No entities to update; the loop is exercised anyway.
                 return []
 
-            # Patch HA helpers & dispatcher.
             monkeypatch.setattr(
-                mod.device_registry, "async_get", lambda _: FakeDR(), raising=True
+                pa_mod.device_registry, "async_get", lambda _: FakeDR(), raising=True
             )
             monkeypatch.setattr(
-                mod.entity_registry, "async_get", lambda _: FakeER(), raising=True
+                pa_mod.entity_registry, "async_get", lambda _: FakeER(), raising=True
             )
             monkeypatch.setattr(
-                mod.entity_registry,
+                pa_mod.entity_registry,
                 "async_entries_for_device",
                 fake_entries_for_device,
                 raising=True,
             )
             monkeypatch.setattr(
-                mod, "async_dispatcher_send", lambda *args, **kw: None, raising=True
+                pa_mod, "async_dispatcher_send", lambda *args, **kw: None, raising=True
             )
 
-            # No exceptions expected; internal traversal will append 'child' twice,
-            # so on second pop it will be in 'visited' and trigger L612 'continue'.
             await srv.update(srv.settings.cpid)
         finally:
             task.cancel()

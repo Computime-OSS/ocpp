@@ -3,7 +3,10 @@
 #
 # On first run:
 #   1. Creates a Python venv at repo root (.ha-venv) and installs Home Assistant.
-#   2. Symlinks ocpp/custom_components/ocpp -> config/custom_components/ocpp.
+#   2. Installs dev deps from ocpp/requirements.txt (pytest, ruff, etc.) when present.
+#   3. Symlinks ocpp/custom_components/ocpp -> config/custom_components/ocpp.
+#
+# To create/update the venv without starting HA: ./ocpp/scripts/setup_venv.sh
 #
 # Usage (from repo root):
 #   ./ocpp/scripts/run_ha.sh
@@ -34,6 +37,10 @@ fi
 "$VENV_DIR/bin/pip" install -q "ocpp>=2.1.0" "websockets>=14.1"
 # Keep venv Home Assistant version in sync with config DB schema (e.g. schema 48 vs 50)
 "$VENV_DIR/bin/pip" install -q --upgrade homeassistant
+# Dev/test deps (pytest, pytest-homeassistant-custom-component, ruff, …) — same venv as CI/local tests
+if [[ -f "${REPO_ROOT}/ocpp/requirements.txt" ]]; then
+    "$VENV_DIR/bin/pip" install -q -r "${REPO_ROOT}/ocpp/requirements.txt"
+fi
 
 mkdir -p "$CUSTOM_COMPONENTS"
 if [[ -L "$OCPP_LINK" ]]; then

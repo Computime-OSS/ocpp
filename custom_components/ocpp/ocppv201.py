@@ -16,23 +16,25 @@ from ocpp.v201 import call, call_result
 from ocpp.v16.enums import ChargePointStatus as ChargePointStatusv16
 from ocpp.v201.enums import (
     Action,
+    AuthorizationStatusEnumType,
+    ChargingProfileKindEnumType,
+    ChargingProfilePurposeEnumType,
+    ChargingProfileStatusEnumType,
+    ChargingRateUnitEnumType,
+    ChargingStateEnumType,
     ConnectorStatusEnumType,
+    GenericStatusEnumType,
     GetVariableStatusEnumType,
     IdTokenEnumType,
     MeasurandEnumType,
+    NotifyEVChargingNeedsStatusEnumType,
     OperationalStatusEnumType,
+    ReadingContextEnumType,
+    RequestStartStopStatusEnumType,
     ResetEnumType,
     ResetStatusEnumType,
     SetVariableStatusEnumType,
-    AuthorizationStatusEnumType,
     TransactionEventEnumType,
-    ReadingContextEnumType,
-    RequestStartStopStatusEnumType,
-    ChargingStateEnumType,
-    ChargingProfilePurposeEnumType,
-    ChargingRateUnitEnumType,
-    ChargingProfileKindEnumType,
-    ChargingProfileStatusEnumType,
 )
 
 from .chargepoint import (
@@ -44,8 +46,14 @@ from .chargepoint import ChargePoint as cp
 from .enums import Profiles
 
 from .enums import (
-    HAChargerStatuses as cstat,
+    HAChargerDetails as cdet,
     HAChargerSession as csess,
+    HAChargerStatuses as cstat,
+)
+from .smart_charging import (
+    EvseSmartChargingSnapshot,
+    SmartChargingOutcomeKind,
+    run_smart_charging_engine,
 )
 
 from .core_const import (
@@ -83,6 +91,8 @@ class ChargePoint(cp):
     _pending_status_notifications: list[
         tuple[str, str, int, int]
     ]  # (timestamp, connector_status, evse_id, connector_id)
+    _smart_charging_snapshots: dict[int, EvseSmartChargingSnapshot]
+    _smart_charging_recompute_task: asyncio.Task | None
 
     def __init__(
         self,
@@ -109,6 +119,8 @@ class ChargePoint(cp):
         self._evse_to_global: dict[tuple[int, int], int] = {}
         self._pending_status_notifications: list[tuple[str, str, int, int]] = []
         self._connector_status = []
+        self._smart_charging_snapshots = {}
+        self._smart_charging_recompute_task = None
 
     # --- Connector mapping helpers (EVSE <-> global index) ---
     def _build_connector_map(self) -> bool:
@@ -361,7 +373,12 @@ class ChargePoint(cp):
             resp: call_result.SetChargingProfile = await self.call(req)
             if resp.status != ChargingProfileStatusEnumType.accepted:
                 raise OcppError(
-                    f"SetChargingProfile rejected: {resp.status}: {resp.status_info}"
+                    f"Failed to set variable: {resp.status}"
+                    + (
+                        f": {resp.status_info}"
+                        if getattr(resp, "status_info", None)
+                        else ""
+                    )
                 )
             return
 
@@ -405,7 +422,12 @@ class ChargePoint(cp):
         resp: call_result.SetChargingProfile = await self.call(req)
         if resp.status != ChargingProfileStatusEnumType.accepted:
             raise OcppError(
-                f"SetChargingProfile rejected: {resp.status}: {resp.status_info}"
+                f"Failed to set variable: {resp.status}"
+                + (
+                    f": {resp.status_info}"
+                    if getattr(resp, "status_info", None)
+                    else ""
+                )
             )
 
     async def set_availability(self, state: bool = True, connector_id: int | None = 0):
@@ -490,7 +512,7 @@ class ChargePoint(cp):
         resp = await self.call(req)
         if resp.status != ResetStatusEnumType.accepted.value:
             status_suffix: str = f": {resp.status_info}" if resp.status_info else ""
-            raise OcppError(f"Reset rejected: {resp.status}{status_suffix}")
+            raise OcppError(f"OCPP call failed: {resp.status}{status_suffix}")
 
     @staticmethod
     def _parse_ocpp_key(key: str) -> tuple:
@@ -519,10 +541,10 @@ class ChargePoint(cp):
         try:
             resp: call_result.GetVariables = await self.call(req)
         except Exception as e:
-            raise OcppError(f"GetVariables failed: {e}") from e
+            raise OcppError(f"OCPP call failed: {e}") from e
         result: dict = resp.get_variable_result[0]
         if result["attribute_status"] != GetVariableStatusEnumType.accepted:
-            raise OcppError(f"GetVariables rejected: {result}")
+            raise OcppError(f"Failed to get variable: {result}")
         return result["attribute_value"]
 
     async def configure(self, key: str, value: str) -> SetVariableResult:
@@ -534,14 +556,14 @@ class ChargePoint(cp):
         try:
             resp: call_result.SetVariables = await self.call(req)
         except Exception as e:
-            raise OcppError(f"SetVariables failed: {e}") from e
+            raise OcppError(f"OCPP call failed: {e}") from e
         result: dict = resp.set_variable_result[0]
         if result["attribute_status"] == SetVariableStatusEnumType.accepted:
             return SetVariableResult.accepted
         elif result["attribute_status"] == SetVariableStatusEnumType.reboot_required:
             return SetVariableResult.reboot_required
         else:
-            raise OcppError(f"SetVariables rejected: {result}")
+            raise OcppError(f"Failed to set variable: {result}")
 
     @on(Action.boot_notification)
     def on_boot_notification(self, charging_station, reason, **kwargs):
@@ -566,6 +588,85 @@ class ChargePoint(cp):
         """Report EVSE-level status on the global connector."""
         self._metrics[(0, cstat.status_connector.value)].value = evse_status_v16.value
         self.adapter.schedule_task(self.update(self.settings.cpid))
+
+    def _record_incoming_notification(self, action_name: str, payload: dict) -> None:
+        """Store the latest incoming charger notification for diagnostics."""
+        now = datetime.now(tz=UTC)
+        self._metrics[(0, cdet.data_transfer.value)].value = now
+        self._metrics[(0, cdet.data_transfer.value)].extra_attr = {
+            "action": action_name,
+            "payload": payload,
+            "received_at": now.isoformat(),
+        }
+        if self.hass is not None:
+            self.hass.async_create_task(self.update(self.settings.cpid))
+
+    @staticmethod
+    def _notify_payload_evse_id(kwargs: dict) -> int:
+        """EVSE id from Notify* payloads (default 1)."""
+        ev = kwargs.get("evse") or {}
+        if isinstance(ev, dict) and ev.get("id") is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                return int(ev["id"])
+        return 1
+
+    def _store_smart_charging_notify(self, key: str, kwargs: dict) -> None:
+        """Persist latest Notify* payload and schedule policy recompute."""
+        evse_id = self._notify_payload_evse_id(kwargs)
+        snap = self._smart_charging_snapshots.get(evse_id)
+        if snap is None:
+            snap = EvseSmartChargingSnapshot(evse_id=evse_id)
+        payload = dict(kwargs)
+        if key == "needs":
+            snap.notify_ev_charging_needs = payload
+        elif key == "limit":
+            snap.notify_charging_limit = payload
+        elif key == "schedule":
+            snap.notify_ev_charging_schedule = payload
+        snap.updated_at = datetime.now(tz=UTC)
+        self._smart_charging_snapshots[evse_id] = snap
+        self._schedule_smart_charging_recompute()
+
+    def _schedule_smart_charging_recompute(self) -> None:
+        """Debounce smart charging runs after rapid Notify* sequences."""
+        if self.hass is None:
+            return
+        if self._smart_charging_recompute_task and not self._smart_charging_recompute_task.done():
+            self._smart_charging_recompute_task.cancel()
+        self._smart_charging_recompute_task = self.hass.async_create_task(
+            self._debounced_smart_charging()
+        )
+
+    async def _debounced_smart_charging(self) -> None:
+        await asyncio.sleep(0.35)
+        await self._run_smart_charging_policy()
+
+    async def _run_smart_charging_policy(self) -> None:
+        """Run platform smart charging engine; may call SetChargingProfile via set_charge_rate."""
+        try:
+            outcome = await run_smart_charging_engine(
+                self.adapter,
+                cpid=self.settings.cpid,
+                max_configured_amps=int(self.settings.max_current),
+                smart_charging_inventory_available=bool(
+                    self._inventory and self._inventory.smart_charging_available
+                ),
+                snapshots=dict(self._smart_charging_snapshots),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            _LOGGER.warning("Smart charging policy failed: %s", err)
+            return
+        if outcome.kind == SmartChargingOutcomeKind.NOOP:
+            return
+        if outcome.kind == SmartChargingOutcomeKind.APPLY_STATION_CURRENT_CAP:
+            if outcome.limit_amps is None:
+                return
+            try:
+                await self.set_charge_rate(limit_amps=outcome.limit_amps, conn_id=0)
+            except Exception as err:
+                _LOGGER.warning("Smart charging could not apply charge rate: %s", err)
 
     @on(Action.status_notification)
     def on_status_notification(
@@ -602,6 +703,7 @@ class ChargePoint(cp):
     @on(Action.notify_event)
     def on_notify_event(self, **kwargs):
         """Perform OCPP callback."""
+        self._record_incoming_notification(Action.notify_event.value, kwargs)
         return call_result.NotifyEvent()
 
     @on(Action.notify_report)
@@ -713,6 +815,31 @@ class ChargePoint(cp):
             self._wait_inventory.set()
 
         return call_result.NotifyReport()
+
+    @on(Action.notify_ev_charging_needs)
+    def on_notify_ev_charging_needs(self, **kwargs):
+        """Handle NotifyEVChargingNeeds sent by the charger."""
+        self._record_incoming_notification(Action.notify_ev_charging_needs.value, kwargs)
+        self._store_smart_charging_notify("needs", kwargs)
+        return call_result.NotifyEVChargingNeeds(
+            NotifyEVChargingNeedsStatusEnumType.accepted
+        )
+
+    @on(Action.notify_charging_limit)
+    def on_notify_charging_limit(self, **kwargs):
+        """Handle NotifyChargingLimit sent by the charger."""
+        self._record_incoming_notification(Action.notify_charging_limit.value, kwargs)
+        self._store_smart_charging_notify("limit", kwargs)
+        return call_result.NotifyChargingLimit()
+
+    @on(Action.notify_ev_charging_schedule)
+    def on_notify_ev_charging_schedule(self, **kwargs):
+        """Handle NotifyEVChargingSchedule sent by the charger."""
+        self._record_incoming_notification(
+            Action.notify_ev_charging_schedule.value, kwargs
+        )
+        self._store_smart_charging_notify("schedule", kwargs)
+        return call_result.NotifyEVChargingSchedule(GenericStatusEnumType.accepted)
 
     @on(Action.authorize)
     def on_authorize(self, id_token: dict, **kwargs):

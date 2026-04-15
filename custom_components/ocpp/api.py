@@ -580,22 +580,27 @@ class CentralSystem:
 
         resp = False
         if cp_id in self.charge_points:
-            if service_name == csvcs.service_availability.name:
-                resp = await self.charge_points[cp_id].set_availability(
-                    state, connector_id=connector_id
-                )
-            if service_name == csvcs.service_charge_start.name:
-                resp = await self.charge_points[cp_id].start_transaction(
-                    connector_id=connector_id
-                )
-            if service_name == csvcs.service_charge_stop.name:
-                resp = await self.charge_points[cp_id].stop_transaction(
-                    connector_id=connector_id
-                )
-            if service_name == csvcs.service_reset.name:
-                resp = await self.charge_points[cp_id].reset()
-            if service_name == csvcs.service_unlock.name:
-                resp = await self.charge_points[cp_id].unlock(connector_id=connector_id)
+            try:
+                if service_name == csvcs.service_availability.name:
+                    resp = await self.charge_points[cp_id].set_availability(
+                        state, connector_id=connector_id
+                    )
+                if service_name == csvcs.service_charge_start.name:
+                    resp = await self.charge_points[cp_id].start_transaction(
+                        connector_id=connector_id
+                    )
+                if service_name == csvcs.service_charge_stop.name:
+                    resp = await self.charge_points[cp_id].stop_transaction(
+                        connector_id=connector_id
+                    )
+                if service_name == csvcs.service_reset.name:
+                    resp = await self.charge_points[cp_id].reset()
+                if service_name == csvcs.service_unlock.name:
+                    resp = await self.charge_points[cp_id].unlock(connector_id=connector_id)
+            except OcppValidationError as e:
+                raise ServiceValidationError(str(e)) from e
+            except OcppError as e:
+                raise HomeAssistantError(str(e)) from e
         return resp
 
     def device_info(self):

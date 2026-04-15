@@ -16,6 +16,7 @@ from collections.abc import Coroutine
 from typing import Any
 
 from .core_const import CONFIG, DATA_UPDATED, DOMAIN
+from .smart_charging.types import GridConstraints, TariffHorizon, UserChargingPreferences
 
 
 STATE_OK = "ok"
@@ -107,6 +108,20 @@ class PlatformAdapter(ABC):
     ) -> None:
         """Register a service with the platform."""
 
+    async def get_tariff_horizon(self, charge_point_id: str) -> TariffHorizon | None:
+        """Return day-ahead or intraday prices when overridden; default none."""
+        return None
+
+    async def get_grid_constraints(self, charge_point_id: str) -> GridConstraints | None:
+        """Return site or grid limits when overridden; default none."""
+        return None
+
+    async def get_user_charging_preferences(
+        self, charge_point_id: str
+    ) -> UserChargingPreferences | None:
+        """Return user charging preferences when overridden; default none."""
+        return None
+
 
 # Keep homeassistant-specific implementation inside the integration layer.
 try:
@@ -115,6 +130,8 @@ try:
     from homeassistant.core import HomeAssistant, SupportsResponse
     from homeassistant.helpers import device_registry, entity_registry
     from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+    from .core_const import CONF_SMART_CHARGING_GRID_MAX_AMPS_ENTITY
 
     class HomeAssistantAdapter(PlatformAdapter):
         """Home Assistant implementation of the PlatformAdapter."""
@@ -310,6 +327,23 @@ try:
             self.hass.services.async_register(
                 domain, service_name, handler, schema, supports_response
             )
+
+        async def get_grid_constraints(self, charge_point_id: str) -> GridConstraints | None:
+            """Return max charge current from optional YAML-configured sensor entity."""
+            cfg = self.get_config()
+            entity_id = cfg.get(CONF_SMART_CHARGING_GRID_MAX_AMPS_ENTITY)
+            if not entity_id or not isinstance(entity_id, str):
+                return None
+            st = self.hass.states.get(entity_id.strip())
+            if st is None or st.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, None, ""):
+                return None
+            try:
+                amps = float(st.state)
+            except (TypeError, ValueError):
+                return None
+            if amps <= 0:
+                return None
+            return GridConstraints(max_charge_current_amps=amps)
 
 except ImportError:  # pragma: no cover
     # When Home Assistant is not available (e.g. in unit tests), the adapter is
