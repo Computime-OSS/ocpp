@@ -58,7 +58,7 @@ CONF_SERVICE_DATA_SCHEMA = vol.Schema(
 GCONF_SERVICE_DATA_SCHEMA = vol.Schema(
     {
         vol.Optional("devid"): cv.string,
-        vol.Required("ocpp_key"): cv.string,
+        vol.Optional("ocpp_key"): cv.string,
     }
 )
 GDIAG_SERVICE_DATA_SCHEMA = vol.Schema(
@@ -706,6 +706,6 @@ class CentralSystem:
     @convert_ocpp_errors
     async def handle_get_configuration(self, call, cp) -> ServiceResponse:
         """Handle the get configuration service call."""
-        key = call.data.get("ocpp_key")
+        key = call.data.get("ocpp_key", "")
         value = await cp.get_configuration(key)
         return {"value": value}
