@@ -1,12 +1,13 @@
 """Implement a test by a simulating an OCPP 2.0.1 chargepoint."""
 
 import asyncio
+from copy import deepcopy
 from datetime import datetime, UTC
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.ocpp.const import CONF_CPIDS, CONF_CPID
+from custom_components.ocpp.const import CONF_CPIDS, CONF_CPID, CONF_PORT
 from custom_components.ocpp.const import (
     DOMAIN as OCPP_DOMAIN,
 )
@@ -283,11 +284,14 @@ class MultiConnectorChargePoint(cpclass):
 
 
 @pytest.mark.timeout(150)
-async def test_v201_multi_connectors_per_evse(hass, socket_enabled):
+async def test_v201_multi_connectors_per_evse(
+    hass, socket_enabled, unused_tcp_port: int
+):
     """Test multi connector per EVSE functionality."""
     cp_id = "CP_v201_multi"
 
-    config_data = MOCK_CONFIG_DATA.copy()
+    config_data = deepcopy(MOCK_CONFIG_DATA)
+    config_data[CONF_PORT] = unused_tcp_port
     config_data[CONF_CPIDS].append({cp_id: MOCK_CONFIG_CP_APPEND.copy()})
     config_data[CONF_CPIDS][-1][cp_id][CONF_CPID] = "test_v201_cpid"
 

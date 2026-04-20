@@ -225,6 +225,15 @@ async def test_services(hass, cpid, serv_list, socket_enabled):
 test_services.__test__ = False
 
 
+async def test_services_expect_unknown_devid(hass, cpid, serv_list, socket_enabled):
+    """Assert service calls fail for an unknown charger id."""
+    with pytest.raises(HomeAssistantError, match="Unknown charger devid"):
+        await test_services(hass, cpid, serv_list, socket_enabled)
+
+
+test_services_expect_unknown_devid.__test__ = False
+
+
 # @pytest.mark.skip(reason="skip")
 @pytest.mark.timeout(20)  # Set timeout for this test
 @pytest.mark.parametrize(
@@ -644,6 +653,12 @@ async def test_cms_responses_errors_v16(
                         socket_enabled,
                     ),
                     test_services(
+                        hass,
+                        cs.charge_points[cp_id].settings.cpid,
+                        SERVICES_ERROR,
+                        socket_enabled,
+                    ),
+                    test_services_expect_unknown_devid(
                         hass,
                         "xxx",  # Test with incorrect devid supplied
                         SERVICES_ERROR,
