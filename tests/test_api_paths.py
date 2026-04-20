@@ -383,6 +383,35 @@ async def test_check_charger_available_decorator_and_services(hass):
     assert resp == {"value": "value-for:Foo"}
 
 
+@pytest.mark.asyncio
+async def test_resolve_charge_point_multiple_requires_devid(hass):
+    """When several chargers are connected, devid is required."""
+    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA.copy())
+    cs = CentralSystem(hass, entry)
+    _install_dummy_cp(cs, cpid="first", cp_id="CP_FIRST")
+    _install_dummy_cp(cs, cpid="second", cp_id="CP_SECOND")
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault("config", {})
+
+    with pytest.raises(HomeAssistantError, match="Multiple chargers"):
+        await cs.handle_clear_profile(SimpleNamespace(data={}))
+
+    await cs.handle_clear_profile(SimpleNamespace(data={"devid": "first"}))
+
+
+@pytest.mark.asyncio
+async def test_resolve_charge_point_unknown_devid(hass):
+    """Unknown devid raises a clear error."""
+    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA.copy())
+    cs = CentralSystem(hass, entry)
+    _install_dummy_cp(cs, cpid="only", cp_id="CP_ONLY")
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault("config", {})
+
+    with pytest.raises(HomeAssistantError, match="Unknown charger devid"):
+        await cs.handle_clear_profile(SimpleNamespace(data={"devid": "missing"}))
+
+
 def test_del_metric_variants(hass):
     """Test the del_metric function."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA.copy())

@@ -138,6 +138,7 @@ class CentralSystem:
             csvcs.service_trigger_custom_message.value,
             self.handle_trigger_custom_message,
             CUSTMSG_SERVICE_DATA_SCHEMA,
+            SupportsResponse.OPTIONAL,
         )
         self.adapter.register_service(
             DOMAIN,
@@ -149,6 +150,7 @@ class CentralSystem:
             csvcs.service_set_charge_rate.value,
             self.handle_set_charge_rate,
             CHRGR_SERVICE_DATA_SCHEMA,
+            SupportsResponse.OPTIONAL,
         )
         self.adapter.register_service(
             DOMAIN,
@@ -609,17 +611,30 @@ class CentralSystem:
             "identifiers": {(DOMAIN, self.id)},
         }
 
+    def _resolve_charge_point_for_service(self, call):
+        """Resolve target charge point from optional devid (HA cpid or OCPP id)."""
+        if not self.charge_points:
+            raise HomeAssistantError("No chargers connected")
+        devid = call.data.get("devid")
+        if devid is not None:
+            cp_id = self.cpids.get(devid, devid)
+            if cp_id not in self.charge_points:
+                raise HomeAssistantError(f"Unknown charger devid: {devid}")
+            return self.charge_points[cp_id], str(cp_id)
+        if len(self.charge_points) == 1:
+            cid, cp = next(iter(self.charge_points.items()))
+            return cp, str(cid)
+        raise HomeAssistantError(
+            "Multiple chargers connected; specify devid (cpid or OCPP charge point id)"
+        )
+
     def check_charger_available(func):
         """Check charger is available before executing service with Decorator."""
 
         async def wrapper(self, call, *args, **kwargs):
-            try:
-                cp_id = self.cpids.get(call.data["devid"], call.data["devid"])
-                cp = self.charge_points[cp_id]
-            except KeyError:
-                cp = list(self.charge_points.values())[0]
+            cp, cp_id = self._resolve_charge_point_for_service(call)
             if cp.status == STATE_UNAVAILABLE:
-                _LOGGER.warning(f"{cp_id}: charger is currently unavailable")
+                _LOGGER.warning("%s: charger is currently unavailable", cp_id)
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,
                     translation_key="unavailable",
@@ -645,10 +660,11 @@ class CentralSystem:
     # Define custom service handles for charge point
     @check_charger_available
     @convert_ocpp_errors
-    async def handle_trigger_custom_message(self, call, cp):
+    async def handle_trigger_custom_message(self, call, cp) -> ServiceResponse:
         """Handle the message request with a custom message."""
         requested_message = call.data.get("requested_message")
-        await cp.trigger_custom_message(requested_message)
+        ok = await cp.trigger_custom_message(requested_message)
+        return {"success": bool(ok)}
 
     @check_charger_available
     @convert_ocpp_errors
@@ -682,21 +698,26 @@ class CentralSystem:
 
     @check_charger_available
     @convert_ocpp_errors
-    async def handle_set_charge_rate(self, call, cp):
+    async def handle_set_charge_rate(self, call, cp) -> ServiceResponse:
         """Handle the data transfer service call."""
         amps = call.data.get("limit_amps", None)
         watts = call.data.get("limit_watts", None)
         id = call.data.get("conn_id", 0)
         custom_profile = call.data.get("custom_profile", None)
+        mode = "none"
         if custom_profile is not None:
             if type(custom_profile) is str:
                 custom_profile = custom_profile.replace("'", '"')
                 custom_profile = json.loads(custom_profile)
             await cp.set_charge_rate(profile=custom_profile, conn_id=id)
+            mode = "custom_profile"
         elif watts is not None:
             await cp.set_charge_rate(limit_watts=watts, conn_id=id)
+            mode = "limit_watts"
         elif amps is not None:
             await cp.set_charge_rate(limit_amps=amps, conn_id=id)
+            mode = "limit_amps"
+        return {"accepted": True, "mode": mode, "conn_id": id}
 
     @check_charger_available
     @convert_ocpp_errors

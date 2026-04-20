@@ -17,6 +17,7 @@ from ocpp.v16.enums import ChargePointStatus as ChargePointStatusv16
 from ocpp.v201.enums import (
     Action,
     AuthorizationStatusEnumType,
+    MessageTriggerEnumType,
     ChargingProfileKindEnumType,
     ChargingProfilePurposeEnumType,
     ChargingProfileStatusEnumType,
@@ -35,6 +36,7 @@ from ocpp.v201.enums import (
     ResetStatusEnumType,
     SetVariableStatusEnumType,
     TransactionEventEnumType,
+    TriggerMessageStatusEnumType,
 )
 
 from .chargepoint import (
@@ -65,6 +67,33 @@ from .core_const import (
 from .core_errors import OcppError, OcppValidationError
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
+
+
+def _to_message_trigger_v201(name: str) -> str | None:
+    """Map HA service / user string to OCPP 2.0.1 MessageTriggerEnumType value."""
+
+    raw = str(name).strip()
+    if not raw:
+        return None
+    valid = {x.value for x in MessageTriggerEnumType}
+    if raw in valid:
+        return raw
+    key = raw.replace(" ", "").replace("_", "").lower()
+    aliases: dict[str, str] = {
+        "bootnotification": MessageTriggerEnumType.boot_notification.value,
+        "logstatusnotification": MessageTriggerEnumType.log_status_notification.value,
+        "firmwarestatusnotification": MessageTriggerEnumType.firmware_status_notification.value,
+        "heartbeat": MessageTriggerEnumType.heartbeat.value,
+        "metervalues": MessageTriggerEnumType.meter_values.value,
+        "signchargingstationcertificate": MessageTriggerEnumType.sign_charging_station_certificate.value,
+        "signv2gcertificate": MessageTriggerEnumType.sign_v2g_certificate.value,
+        "statusnotification": MessageTriggerEnumType.status_notification.value,
+        "transactionevent": MessageTriggerEnumType.transaction_event.value,
+        "signcombinedcertificate": MessageTriggerEnumType.sign_combined_certificate.value,
+        "publishfirmwarestatusnotification": MessageTriggerEnumType.publish_firmware_status_notification.value,
+        "diagnosticsstatusnotification": MessageTriggerEnumType.log_status_notification.value,
+    }
+    return aliases.get(key)
 
 
 @dataclass
@@ -340,6 +369,39 @@ class ChargePoint(cp):
                     evse={"id": evse_id, "connector_id": connector_id},
                 )
                 await self.call(req)
+
+    async def trigger_custom_message(
+        self,
+        requested_message: str = "StatusNotification",
+    ) -> bool:
+        """Send TriggerMessage (OCPP 2.0.1) to request a message from the charge point."""
+
+        mapped = _to_message_trigger_v201(requested_message)
+        if mapped is None:
+            _LOGGER.warning(
+                "Unsupported TriggerMessage for OCPP 2.0.1: %s", requested_message
+            )
+            return False
+
+        if (
+            mapped == MessageTriggerEnumType.status_notification.value
+            and self._inventory
+            and self._inventory.evse_count > 0
+        ):
+            await self.trigger_status_notification()
+            return True
+
+        try:
+            req = call.TriggerMessage(mapped)
+            resp: call_result.TriggerMessage = await self.call(req)
+        except OCPPError as err:
+            _LOGGER.warning("TriggerMessage failed: %s", err)
+            return False
+
+        if resp.status != TriggerMessageStatusEnumType.accepted:
+            _LOGGER.warning("TriggerMessage not accepted: %s", resp.status)
+            return False
+        return True
 
     async def clear_profile(self):
         """Clear all charging profiles."""
