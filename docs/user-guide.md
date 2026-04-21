@@ -175,13 +175,13 @@ The Grizzl-E updates these metrics every 30s during charging sessions:
 * `Time Session` (duration of active/last charging session)
 * `Voltage` (seems to report a little higher than expected)
 
-There are several other metrics too, I'm not sure what they mean, and also `Export` variants of some of the `Import` entities, but they seem to always be zero for me.
+Additional metrics may appear depending on the charger and supported OCPP measurands. `Export` variants of some `Import` entities are exposed in Home Assistant; on many chargers they remain at zero unless export metering is reported.
 
 ### Diagnostics
 
 * `Status Connector` (Available, Preparing, Charging, etc)
 
-There are many other diagnostic entities about the features, ids, model, firmware etc, not sure if they'd be much practical use.
+Additional diagnostic entities expose firmware, model, and feature identifiers; whether they are useful depends on troubleshooting and automation needs.
 
 ### Controls
 
@@ -189,7 +189,7 @@ There are many other diagnostic entities about the features, ids, model, firmwar
 * `Charge Control`
 * `Maximum Current` (if `Current Offered` doesn't reach this when charging, raise the current to the max in the EVO app itself, connect via Bluetooth)
 * `Reset` (reboot the charger)
-* `Unlock` (I think this will unlock the charging cable, if permanent lock is enabled from the app)
+* `Unlock` (when supported by the charger, releases the cable lock; behavior may depend on vendor app settings such as permanent lock)
 
 ## OCPP Compatibility Issues
 

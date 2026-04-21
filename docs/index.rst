@@ -8,6 +8,8 @@
 
 This is a Home Assistant integration for Electric Vehicle chargers that support the Open Charge Point Protocol.
 
+**Documentation version:** matches the integration release **0.8.0** declared in ``custom_components/ocpp/manifest.json``. When the manifest version changes, update this sentence and add an entry to ``changelog.md``.
+
 Table of Contents
 =================
 
@@ -15,8 +17,12 @@ Table of Contents
    :maxdepth: 16
 
    installation
+   connector-overview
+   platform-development-guide
    supported-devices
    user-guide
+   Charge_automation
    support
    debugging
    development
+   changelog
