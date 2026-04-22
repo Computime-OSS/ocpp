@@ -3,17 +3,79 @@
 [![Documentation Status](https://readthedocs.org/projects/home-assistant-ocpp/badge/?version=latest)](https://home-assistant-ocpp.readthedocs.io/en/latest/?badge=latest)
 [![hacs_downloads](https://img.shields.io/github/downloads/lbbrhzn/ocpp/latest/total)](https://github.com/lbbrhzn/ocpp/releases/latest)
 
+# OCPP integration repository
+
 ![OCPP](https://github.com/home-assistant/brands/raw/master/custom_integrations/ocpp/icon.png)
 
-This is a Home Assistant integration for Electric Vehicle chargers that support the following Open Charge Point Protocols 1.6j, 2.0.1 and 2.1 (experimental).
+# ElaadNL Interoperability Reference Repository
 
-* based on the [Python OCPP Package](https://github.com/mobilityhouse/ocpp).
-* HACS compliant repository 
+This repository is part of the Residential Flexibility Interoperability RFP, initiated by ElaadNL and FAN under the Dutch ßNational Grid Congestion Action Program.
 
-Documentation can be found here [home-assistant-ocpp.readthedocs.io](https://home-assistant-ocpp.readthedocs.io)
+It serves as a shared documentation and collaboration baseline for all participating consortia working on open-source connectors between Home Energy Management Systems (HEMS) and flexible energy-intensive devices (FEIDs).
 
-**💡 Tip:** If you like this project consider buying me a coffee or a cocktail:
+---
 
-<a href="https://www.buymeacoffee.com/lbbrhzn" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/default-black.png" alt="Buy Me A Coffee" width="150px">
-</a>
+## What this repository includes
+
+- A production integration for Home Assistant and OCPP chargers
+- A reusable protocol-core architecture with platform adapter support
+- Documentation for installation, operation, troubleshooting, and development
+- Contributor guidance in `CONTRIBUTING.md`, `SECURITY.md`, and `SUPPORT.md`
+
+---
+
+## Protocol and runtime scope
+
+- Protocols: OCPP 1.6j, OCPP 2.0.1, OCPP 2.1 (experimental)
+- Runtime: Home Assistant
+- Foundation package: [mobilityhouse/ocpp](https://github.com/mobilityhouse/ocpp)
+
+---
+
+## Documentation
+
+- User and developer docs: [home-assistant-ocpp.readthedocs.io](https://home-assistant-ocpp.readthedocs.io)
+- Repository docs index: [`docs/README.md`](./docs/README.md)
+- Interoperability-aligned baseline docs:
+  - [`docs/overview.md`](./docs/overview.md)
+  - [`docs/use-cases.md`](./docs/use-cases.md)
+  - [`docs/glossary.md`](./docs/glossary.md)
+
+---
+
+## Repository structure
+
+```text
+/
+├── README.md
+├── CONTRIBUTING.md
+├── SECURITY.md
+├── SUPPORT.md
+├── custom_components/
+│   └── ocpp/
+│       ├── __init__.py            # Integration bootstrap and setup
+│       ├── manifest.json          # Home Assistant integration metadata
+│       ├── config_flow.py         # UI configuration flow
+│       ├── api.py                 # Central system orchestration and services
+│       ├── chargepoint.py         # Shared charge point behavior
+│       ├── ocppv16.py             # OCPP 1.6 message handlers
+│       ├── ocppv201.py            # OCPP 2.x message handlers
+│       ├── platform_adapter.py    # Platform abstraction boundary
+│       ├── smart_charging/        # Smart charging engine and types
+│       └── translations/          # Localization files
+├── tests/                         # Unit and integration-focused test suites
+├── docs/                          # User and developer documentation source
+├── scripts/                       # Local development and lint helper scripts
+└── requirements.txt               # Python dependencies
+```
+
+---
+
+## Support and contribution
+
+- For support questions: see [`SUPPORT.md`](./SUPPORT.md)
+- For bug reports and feature requests: use [GitHub issues](https://github.com/lbbrhzn/ocpp/issues)
+- For contribution workflow: see [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- For vulnerability reports: see [`SECURITY.md`](./SECURITY.md)
+
+---

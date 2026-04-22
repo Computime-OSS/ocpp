@@ -16,6 +16,11 @@ Table of Contents
 .. toctree::
    :maxdepth: 16
 
+   documentation-index
+   overview
+   use-cases
+   glossary
+   style-guide
    installation
    connector-overview
    platform-development-guide

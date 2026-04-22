@@ -5,4 +5,4 @@ The integration supports secure connections, but does not perform any validation
 
 ## Reporting a Vulnerability
 
-Reporting a vulnerability can be done by creating an issue at [GitHub Issues](https://github.com/lbbrhzn/ocpp/issues).
+Reporting a vulnerability can be done by creating an issue at [GitHub Issues](https://github.com/ElaadNL/open-ocpp-hems-connector/issues).
