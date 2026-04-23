@@ -45,11 +45,19 @@ htmlcov/
 .coverage.*
 .cache
 nosetests.xml
-coverage.xml
+*coverage.xml
+*test-results.xml
+*bandit-report.json
 *.cover
 *.py,cover
 .hypothesis/
 .pytest_cache/
+
+#sonar
+#sonar analysis
+sonar*.properties
+.sonar/
+.scannerwork/
 
 # Translations
 *.mo
