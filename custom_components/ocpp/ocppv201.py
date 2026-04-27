@@ -413,6 +413,48 @@ class ChargePoint(cp):
         )
         await self.call(req)
 
+    def _resolve_evse_target(self, conn_id: int) -> int:
+        evse_target = 0
+        if conn_id and conn_id > 0:
+            with contextlib.suppress(Exception):
+                evse_target, _ = self._global_to_pair(int(conn_id))
+        return evse_target
+
+    def _get_limit_spec(
+        self,
+        limit_amps: int | None,
+        limit_watts: int | None,
+    ) -> tuple[int | float, str] | None:
+        if limit_watts is not None:
+            if float(limit_watts) >= 22000:
+                return None
+            return int(limit_watts), ChargingRateUnitEnumType.watts.value
+
+        if limit_amps is not None:
+            if float(limit_amps) >= 32:
+                return None
+            normalized_amps = (
+                int(limit_amps) if float(limit_amps).is_integer() else float(limit_amps)
+            )
+            return normalized_amps, ChargingRateUnitEnumType.amps.value
+
+        return None
+
+    @staticmethod
+    def _raise_for_rejected_profile(resp: call_result.SetChargingProfile) -> None:
+        if resp.status != ChargingProfileStatusEnumType.accepted:
+            raise OcppError(
+                f"Failed to set variable: {resp.status}"
+                + (
+                    f": {resp.status_info}" if getattr(resp, "status_info", None) else ""
+                )
+            )
+
+    async def _apply_charging_profile(self, evse_target: int, profile: dict) -> None:
+        req = call.SetChargingProfile(evse_target, profile)
+        resp: call_result.SetChargingProfile = await self.call(req)
+        self._raise_for_rejected_profile(resp)
+
     async def set_charge_rate(
         self,
         limit_amps: int | None = None,
@@ -425,44 +467,16 @@ class ChargePoint(cp):
         - conn_id=0 (default) targets the Charging Station (evse_id=0).
         - conn_id>0 targets the specific EVSE corresponding to the global connector index.
         """
-
-        evse_target = 0
-        if conn_id and conn_id > 0:
-            with contextlib.suppress(Exception):
-                evse_target, _ = self._global_to_pair(int(conn_id))
+        evse_target = self._resolve_evse_target(conn_id)
         if profile is not None:
-            req = call.SetChargingProfile(evse_target, profile)
-            resp: call_result.SetChargingProfile = await self.call(req)
-            if resp.status != ChargingProfileStatusEnumType.accepted:
-                raise OcppError(
-                    f"Failed to set variable: {resp.status}"
-                    + (
-                        f": {resp.status_info}"
-                        if getattr(resp, "status_info", None)
-                        else ""
-                    )
-                )
+            await self._apply_charging_profile(evse_target, profile)
             return
 
-        if limit_watts is not None:
-            if float(limit_watts) >= 22000:
-                await self.clear_profile()
-                return
-            period_limit = int(limit_watts)
-            unit_value = ChargingRateUnitEnumType.watts.value
-
-        elif limit_amps is not None:
-            if float(limit_amps) >= 32:
-                await self.clear_profile()
-                return
-            period_limit = (
-                int(limit_amps) if float(limit_amps).is_integer() else float(limit_amps)
-            )
-            unit_value = ChargingRateUnitEnumType.amps.value
-
-        else:
+        limit_spec = self._get_limit_spec(limit_amps, limit_watts)
+        if limit_spec is None:
             await self.clear_profile()
             return
+        period_limit, unit_value = limit_spec
 
         schedule: dict = {
             "id": 1,
@@ -478,19 +492,7 @@ class ChargePoint(cp):
             "charging_schedule": [schedule],
         }
 
-        req: call.SetChargingProfile = call.SetChargingProfile(
-            evse_target, charging_profile
-        )
-        resp: call_result.SetChargingProfile = await self.call(req)
-        if resp.status != ChargingProfileStatusEnumType.accepted:
-            raise OcppError(
-                f"Failed to set variable: {resp.status}"
-                + (
-                    f": {resp.status_info}"
-                    if getattr(resp, "status_info", None)
-                    else ""
-                )
-            )
+        await self._apply_charging_profile(evse_target, charging_profile)
 
     async def set_availability(self, state: bool = True, connector_id: int | None = 0):
         """Change availability."""

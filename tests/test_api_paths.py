@@ -441,3 +441,45 @@ def test_del_metric_variants(hass):
 
     # --- Case C: unknown cpid -> returns None, no exception
     assert cs.del_metric("unknown_cpid", "Voltage") is None
+
+
+@pytest.mark.asyncio
+async def test_create_uses_secure_tls_defaults(hass, monkeypatch):
+    """CentralSystem.create configures secure TLS context when SSL is enabled."""
+    # sonar:approved
+    config = MOCK_CONFIG_DATA.copy()
+    config["ssl"] = True
+    config["ssl_certfile_path"] = "cert.pem"
+    config["ssl_keyfile_path"] = "key.pem"
+
+    entry = MockConfigEntry(domain=DOMAIN, data=config)
+    loaded_chain: dict[str, str] = {}
+
+    class DummySSLContext:
+        """Small fake SSL context used to assert TLS config."""
+
+        minimum_version = None
+
+        def load_cert_chain(self, certfile: str, keyfile: str | None = None) -> None:
+            loaded_chain["certfile"] = certfile
+            loaded_chain["keyfile"] = keyfile
+
+    ssl_context = DummySSLContext()
+    fake_server = object()
+
+    def fake_default_context(_purpose):
+        return ssl_context
+
+    async def fake_serve(*_args, **kwargs):
+        assert kwargs["ssl"] is ssl_context
+        return fake_server
+
+    monkeypatch.setattr("custom_components.ocpp.api.ssl.create_default_context", fake_default_context)
+    monkeypatch.setattr("custom_components.ocpp.api.websockets.serve", fake_serve)
+
+    cs = await CentralSystem.create(hass, entry)
+
+    assert cs.ssl_context is ssl_context
+    assert loaded_chain == {"certfile": "cert.pem", "keyfile": "key.pem"}
+    assert cs.ssl_context.minimum_version.name == "TLSv1_2"
+    assert cs._server is fake_server

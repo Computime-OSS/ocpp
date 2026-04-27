@@ -9,6 +9,7 @@ calls Home Assistant APIs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from abc import ABC, abstractmethod
@@ -110,16 +111,19 @@ class PlatformAdapter(ABC):
 
     async def get_tariff_horizon(self, charge_point_id: str) -> TariffHorizon | None:
         """Return day-ahead or intraday prices when overridden; default none."""
+        await asyncio.sleep(0)  # async required to ensure interface compatibility
         return None
 
     async def get_grid_constraints(self, charge_point_id: str) -> GridConstraints | None:
         """Return site or grid limits when overridden; default none."""
+        await asyncio.sleep(0)  # async required to ensure interface compatibility
         return None
 
     async def get_user_charging_preferences(
         self, charge_point_id: str
     ) -> UserChargingPreferences | None:
         """Return user charging preferences when overridden; default none."""
+        await asyncio.sleep(0)  # async required to ensure interface compatibility
         return None
 
 
@@ -242,6 +246,21 @@ try:
                 sw_version=sw_version,
             )
 
+        def _is_entity_refreshable(self, entity: Any) -> bool:
+            """Return True when an entity is enabled and currently available."""
+            if getattr(entity, "disabled", False):
+                return False
+            if getattr(entity, "disabled_by", None):
+                return False
+            return self.hass.states.get(entity.entity_id) is not None
+
+        @staticmethod
+        def _iter_child_device_ids(registry: Any, parent_device_id: str):
+            """Yield direct child device IDs for a parent device."""
+            for dev in registry.devices.values():
+                if dev.via_device_id == parent_device_id:
+                    yield dev.id
+
         def get_entity_ids_to_refresh(self, charge_point_id: str) -> set[str]:
             """Get entity IDs to refresh."""
             er = entity_registry.async_get(self.hass)
@@ -257,23 +276,22 @@ try:
             active_entities: set[str] = set()
 
             while to_visit:
-                dev_id = to_visit.pop(0)
+                dev_id = to_visit.pop()
                 if dev_id in visited:
                     continue
                 visited.add(dev_id)
 
-                for ent in entity_registry.async_entries_for_device(er, dev_id):
-                    if getattr(ent, "disabled", False) or getattr(
-                        ent, "disabled_by", None
-                    ):
-                        continue
-                    if self.hass.states.get(ent.entity_id) is None:
-                        continue
-                    active_entities.add(ent.entity_id)
+                active_entities.update(
+                    ent.entity_id
+                    for ent in entity_registry.async_entries_for_device(er, dev_id)
+                    if self._is_entity_refreshable(ent)
+                )
 
-                for dev in dr.devices.values():
-                    if dev.via_device_id == dev_id and dev.id not in visited:
-                        to_visit.append(dev.id)
+                to_visit.extend(
+                    child_id
+                    for child_id in self._iter_child_device_ids(dr, dev_id)
+                    if child_id not in visited
+                )
 
             return active_entities
 

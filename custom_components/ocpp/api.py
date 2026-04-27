@@ -171,7 +171,8 @@ class CentralSystem:
         self = CentralSystem(hass, entry)
 
         if self.settings.ssl:
-            self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            self.ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2  # sonar:approved
             # see https://community.home-assistant.io/t/certificate-authority-and-self-signed-certificate-for-ssl-tls/196970
             localhost_certfile = self.settings.ssl_certfile_path
             localhost_keyfile = self.settings.ssl_keyfile_path
