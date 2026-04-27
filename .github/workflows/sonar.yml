@@ -45,6 +45,6 @@ jobs:
             -Dsonar.projectKey=Computime-OSS_ocpp
             -Dsonar.organization=computime-oss
             -Dsonar.host.url=https://sonarcloud.io
-            -Dsonar.sources=custom_components/ocpp
+            -Dsonar.sources=custom_components/ocpp,API
             -Dsonar.tests=tests
             -Dsonar.python.coverage.reportPaths=coverage.xml
