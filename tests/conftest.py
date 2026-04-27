@@ -6,6 +6,7 @@ from unittest.mock import patch
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 import pytest
 import websockets
+import copy
 
 from custom_components.ocpp.api import CentralSystem
 from custom_components.ocpp.const import CONF_CPIDS, CONF_PORT, DOMAIN as OCPP_DOMAIN
@@ -78,7 +79,7 @@ async def setup_config_entry(hass, request) -> AsyncGenerator[CentralSystem, Non
     """Setup/teardown mock config entry and central system."""
     # Create a mock entry so we don't have to go through config flow
     # Both version and minor need to match config flow so as not to trigger migration flow
-    config_data = MOCK_CONFIG_DATA.copy()
+    config_data = copy.deepcopy(MOCK_CONFIG_DATA)
     config_data[CONF_CPIDS].append(
         {request.param["cp_id"]: MOCK_CONFIG_CP_APPEND.copy()}
     )
