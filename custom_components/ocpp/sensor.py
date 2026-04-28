@@ -323,6 +323,14 @@ class ChargePointMetric(RestoreSensor, SensorEntity):
 
         if value is not None:
             self._attr_native_value = value
+        # HA's sensor entity casts state to float when state_class is set; a non-numeric
+        # value (e.g. corrupted metric) raises and breaks the state machine. Surface it
+        # as 'unknown' instead.
+        if self.state_class is not None and self._attr_native_value is not None:
+            try:
+                float(self._attr_native_value)
+            except (TypeError, ValueError):
+                return None
         return self._attr_native_value
 
     @property

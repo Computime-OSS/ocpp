@@ -9,7 +9,7 @@ on:
   pull_request:
 
 env:
-  DEFAULT_PYTHON: "3.14"
+  DEFAULT_PYTHON: "3.12"
 
 jobs:
   pre-commit:
@@ -52,7 +52,7 @@ jobs:
         uses: "hacs/action@main"
         with:
           category: "integration"
-          ignore: brands
+          ignore: brands issues topics
 
   hassfest:
     runs-on: "ubuntu-latest"
@@ -93,8 +93,3 @@ jobs:
             -p no:sugar \
             -rA \
             tests
-      - name: "Upload coverage to Codecov"
-        uses: codecov/codecov-action@v6
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          verbose: true
