@@ -1601,7 +1601,10 @@ async def test_monitor_connection_timeout_branch(
             if inspect.iscoroutine(awaitable):
                 awaitable.close()
             if calls["n"] == 1:
-
+                # Grace-period wait_for(connection.wait_closed(), timeout=10) — raise to proceed past it
+                raise TimeoutError
+            if calls["n"] == 2:
+                # ping() — return a never-finishing pong_waiter
                 class _NeverFinishes:
                     def __await__(self):
                         fut = asyncio.get_event_loop().create_future()
