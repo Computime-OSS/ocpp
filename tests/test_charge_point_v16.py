@@ -1611,6 +1611,7 @@ async def test_monitor_connection_timeout_branch(
                         return fut.__await__()
 
                 return _NeverFinishes()
+            # 3rd call — awaiting pong_waiter hits the except TimeoutError branch
             raise TimeoutError
 
         monkeypatch.setattr(cp_mod.asyncio, "wait_for", fake_wait_for, raising=True)
