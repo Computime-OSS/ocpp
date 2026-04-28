@@ -151,6 +151,12 @@ sonar*.properties
 .sonar/
 .scannerwork/
 
+#sonar
+#sonar analysis
+sonar*.properties
+.sonar/
+.scannerwork/
+
 # Translations
 *.mo
 *.pot
