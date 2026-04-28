@@ -35,7 +35,9 @@ jobs:
         run: |
           pytest \
             --cov=custom_components/ocpp \
-            --cov-report=xml:coverage.xml
+            --cov-report=xml:coverage.xml \
+            --timeout=30 \
+            -rA
 
       - name: Run Bandit security analysis
         run: |

@@ -245,14 +245,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # print(hass.services.async_services_for_domain(DOMAIN))
             for service in hass.services.async_services_for_domain(DOMAIN):
                 hass.services.async_remove(DOMAIN, service)
-            # Unload platforms if a charger connected
-            if central_sys.connections == 0:
-                unloaded = True
-            else:
-                unloaded = await hass.config_entries.async_unload_platforms(
-                    entry, PLATFORMS
-                )
-            # Remove entry
+            # Always unload forwarded platforms before removing hass.data. Skipping
+            # async_unload_platforms when connections==0 caused reload (e.g. after
+            # persist_charge_point_config / async_update_entry) to run async_setup_entry
+            # again and hit: "Config entry ... for ocpp.sensor has already been setup!"
+            unloaded = await hass.config_entries.async_unload_platforms(
+                entry, PLATFORMS
+            )
             if unloaded:
                 hass.data[DOMAIN].pop(entry.entry_id)
 

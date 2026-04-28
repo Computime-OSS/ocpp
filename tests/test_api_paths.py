@@ -2,6 +2,7 @@
 
 import contextlib
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -383,6 +384,35 @@ async def test_check_charger_available_decorator_and_services(hass):
     assert resp == {"value": "value-for:Foo"}
 
 
+@pytest.mark.asyncio
+async def test_resolve_charge_point_multiple_requires_devid(hass):
+    """When several chargers are connected, devid is required."""
+    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA.copy())
+    cs = CentralSystem(hass, entry)
+    _install_dummy_cp(cs, cpid="first", cp_id="CP_FIRST")
+    _install_dummy_cp(cs, cpid="second", cp_id="CP_SECOND")
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault("config", {})
+
+    with pytest.raises(HomeAssistantError, match="Multiple chargers"):
+        await cs.handle_clear_profile(SimpleNamespace(data={}))
+
+    await cs.handle_clear_profile(SimpleNamespace(data={"devid": "first"}))
+
+
+@pytest.mark.asyncio
+async def test_resolve_charge_point_unknown_devid(hass):
+    """Unknown devid raises a clear error."""
+    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA.copy())
+    cs = CentralSystem(hass, entry)
+    _install_dummy_cp(cs, cpid="only", cp_id="CP_ONLY")
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault("config", {})
+
+    with pytest.raises(HomeAssistantError, match="Unknown charger devid"):
+        await cs.handle_clear_profile(SimpleNamespace(data={"devid": "missing"}))
+
+
 def test_del_metric_variants(hass):
     """Test the del_metric function."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA.copy())
@@ -412,3 +442,49 @@ def test_del_metric_variants(hass):
 
     # --- Case C: unknown cpid -> returns None, no exception
     assert cs.del_metric("unknown_cpid", "Voltage") is None
+
+
+@pytest.mark.asyncio
+async def test_create_uses_secure_tls_defaults(hass):
+    """CentralSystem.create configures secure TLS context when SSL is enabled."""
+    # sonar:approved
+    config = MOCK_CONFIG_DATA.copy()
+    config["ssl"] = True
+    config["ssl_certfile_path"] = "cert.pem"
+    config["ssl_keyfile_path"] = "key.pem"
+
+    entry = MockConfigEntry(domain=DOMAIN, data=config)
+    loaded_chain: dict[str, str] = {}
+
+    class DummySSLContext:
+        """Small fake SSL context used to assert TLS config."""
+
+        minimum_version = None
+
+        def load_cert_chain(self, certfile: str, keyfile: str | None = None) -> None:
+            loaded_chain["certfile"] = certfile
+            loaded_chain["keyfile"] = keyfile
+
+    ssl_context = DummySSLContext()
+    fake_server = object()
+
+    def fake_default_context(_purpose):
+        return ssl_context
+
+    async def fake_serve(*_args, **kwargs):
+        assert kwargs["ssl"] is ssl_context
+        return fake_server
+
+    with (
+        patch(
+            "custom_components.ocpp.api.ssl.create_default_context",
+            fake_default_context,
+        ),
+        patch("custom_components.ocpp.api.websockets.serve", fake_serve),
+    ):
+        cs = await CentralSystem.create(hass, entry)
+
+    assert cs.ssl_context is ssl_context
+    assert loaded_chain == {"certfile": "cert.pem", "keyfile": "key.pem"}
+    assert cs.ssl_context.minimum_version.name == "TLSv1_2"
+    assert cs._server is fake_server

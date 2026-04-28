@@ -53,11 +53,11 @@ set_charge_rate:
 
 trigger_custom_message:
   name: Trigger Message
-  description: Request a specific message from the charger
+  description: Request a specific message from the charger devid required when more than one charger is connected.
   fields:
     devid:
       name: Charger identifier
-      description: Either HA charger id or Ocpp id
+      description: HA cpid or OCPP charge point id. Required if multiple chargers; optional if exactly one.
       required: false
       advanced: true
       example: charger

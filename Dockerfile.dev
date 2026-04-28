@@ -2,10 +2,11 @@ FROM mcr.microsoft.com/vscode/devcontainers/base:debian
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN \
-    apt-get update \
+RUN curl -fsSL https://dl.yarnpkg.com/debian/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/yarn-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/yarn-archive-keyring.gpg] https://dl.yarnpkg.com/debian/ stable main" \
+       | tee /etc/apt/sources.list.d/yarn.list \
+    && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        # Additional library needed by some tests and accordingly by VScode Tests Discovery
         bluez \
         ffmpeg \
         libudev-dev \
@@ -32,6 +33,15 @@ COPY --from=ghcr.io/alexxit/go2rtc:latest /usr/local/bin/go2rtc /bin/go2rtc
 WORKDIR /usr/src
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+RUN uv python install 3.13.2
+
+# Ensure uv uses Python 3.13.2
+ENV UV_PYTHON=3.13.2
+
+# Ensure VS Code and pip use Python 3.13.2
+ENV PYTHON_VERSION=3.13.2
+ENV PATH="/home/vscode/.local/ha-venv/bin:$PATH"
 
 USER vscode
 

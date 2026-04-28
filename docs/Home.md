@@ -16,4 +16,3 @@ Contents
 * [Support](support)
 * [Development](development)
 * [Debugging](debugging)
-
