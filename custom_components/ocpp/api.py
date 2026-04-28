@@ -600,7 +600,9 @@ class CentralSystem:
                 if service_name == csvcs.service_reset.name:
                     resp = await self.charge_points[cp_id].reset()
                 if service_name == csvcs.service_unlock.name:
-                    resp = await self.charge_points[cp_id].unlock(connector_id=connector_id)
+                    resp = await self.charge_points[cp_id].unlock(
+                        connector_id=connector_id
+                    )
             except OcppValidationError as e:
                 raise ServiceValidationError(str(e)) from e
             except OcppError as e:

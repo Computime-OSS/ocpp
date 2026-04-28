@@ -29,4 +29,3 @@ It aligns local wording with interoperability deliverable terminology.
 - Use terms consistently across all docs, issues, and pull requests
 - Prefer "asset", "control signal", and "setpoint" in cross-platform documentation
 - Keep OCPP-specific names exact when referencing protocol fields or actions
-

@@ -1,4 +1,4 @@
-"""Smart charging policy engine
+"""Smart charging policy engine.
 
 It is basically the layer responsible to do the calculation for smart charging.
 Only a simple calculation is done here, if you were to extend the functionality, you would need to extend the engine.

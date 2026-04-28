@@ -48,3 +48,4 @@ keep-runtime-typing = true
 [lint.per-file-ignores]
 "tests/**" = ["T20", "D102", "D107", "F841", "SIM105"]
 "ocpp/tests/**" = ["T20", "D102", "D107", "F841", "SIM105"]
+"tests/ocpp_server_capability_test.py" = ["E402"]

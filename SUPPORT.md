@@ -49,4 +49,3 @@ Follow the process described in [`SECURITY.md`](./SECURITY.md).
 
 Support is best-effort and community-driven.
 Providing community support here does not prevent anyone from offering separate commercial support.
-

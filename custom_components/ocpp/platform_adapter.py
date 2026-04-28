@@ -17,7 +17,11 @@ from collections.abc import Coroutine
 from typing import Any
 
 from .core_const import CONFIG, DATA_UPDATED, DOMAIN
-from .smart_charging.types import GridConstraints, TariffHorizon, UserChargingPreferences
+from .smart_charging.types import (
+    GridConstraints,
+    TariffHorizon,
+    UserChargingPreferences,
+)
 
 
 STATE_OK = "ok"
@@ -114,7 +118,9 @@ class PlatformAdapter(ABC):
         await asyncio.sleep(0)  # async required to ensure interface compatibility
         return None
 
-    async def get_grid_constraints(self, charge_point_id: str) -> GridConstraints | None:
+    async def get_grid_constraints(
+        self, charge_point_id: str
+    ) -> GridConstraints | None:
         """Return site or grid limits when overridden; default none."""
         await asyncio.sleep(0)  # async required to ensure interface compatibility
         return None
@@ -346,7 +352,9 @@ try:
                 domain, service_name, handler, schema, supports_response
             )
 
-        async def get_grid_constraints(self, charge_point_id: str) -> GridConstraints | None:
+        async def get_grid_constraints(
+            self, charge_point_id: str
+        ) -> GridConstraints | None:
             """Return max charge current from optional YAML-configured sensor entity."""
             cfg = self.get_config()
             entity_id = cfg.get(CONF_SMART_CHARGING_GRID_MAX_AMPS_ENTITY)

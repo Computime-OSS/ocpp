@@ -5,13 +5,15 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.ocpp.const import DOMAIN
-from custom_components.ocpp.platform_adapter import HomeAssistantAdapter, PlatformAdapter
+from custom_components.ocpp.platform_adapter import (
+    HomeAssistantAdapter,
+    PlatformAdapter,
+)
 from tests.const import MOCK_CONFIG_DATA
 
 
@@ -42,7 +44,9 @@ class DummyAdapter(PlatformAdapter):
     def get_config(self) -> dict:
         return {}
 
-    async def persist_charge_point_config(self, charge_point_id: str, data: dict) -> None:
+    async def persist_charge_point_config(
+        self, charge_point_id: str, data: dict
+    ) -> None:
         return None
 
     async def update_device_info(

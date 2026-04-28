@@ -1517,9 +1517,9 @@ async def test_get_diagnostics_and_data_transfer_v16(
             service_data={"devid": cpid, "upload_url": "not-a-valid-url"},
             blocking=True,
         )
-        assert any(
-            "Failed to parse url" in rec.message for rec in caplog.records
-        ), "Expected warning for invalid diagnostics upload_url not found"
+        assert any("Failed to parse url" in rec.message for rec in caplog.records), (
+            "Expected warning for invalid diagnostics upload_url not found"
+        )
 
         # --- get_diagnostics: FW profile NOT supported branch ---
         # Simulate that FirmwareManagement profile is not supported by the CP
@@ -2195,9 +2195,9 @@ async def test_current_import_phase_extra_attrs_single_and_multi_connector(
             if num_connectors == 1:
                 # Without connector_id -> should resolve (fallback) to connector 1
                 attrs = cs.get_extra_attr(cp_id, "Current.Import", connector_id=None)
-                assert (
-                    attrs is not None
-                ), "Expected extra_attr dict for single-connector"
+                assert attrs is not None, (
+                    "Expected extra_attr dict for single-connector"
+                )
                 assert attrs.get("L1") == 5.0
                 assert attrs.get("L2") == 7.0
                 assert attrs.get("L3") == 8.0
@@ -2214,9 +2214,9 @@ async def test_current_import_phase_extra_attrs_single_and_multi_connector(
                 attrs1 = cs.get_extra_attr(cp_id, "Current.Import", connector_id=1)
                 attrs2 = cs.get_extra_attr(cp_id, "Current.Import", connector_id=2)
 
-                assert (
-                    attrs1 is not None and attrs2 is not None
-                ), "Expected extra_attr dicts for both connectors"
+                assert attrs1 is not None and attrs2 is not None, (
+                    "Expected extra_attr dicts for both connectors"
+                )
 
                 # Connector 1 values
                 assert attrs1.get("L1") == 5.0

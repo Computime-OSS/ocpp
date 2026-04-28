@@ -249,7 +249,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # async_unload_platforms when connections==0 caused reload (e.g. after
             # persist_charge_point_config / async_update_entry) to run async_setup_entry
             # again and hit: "Config entry ... for ocpp.sensor has already been setup!"
-            unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            unloaded = await hass.config_entries.async_unload_platforms(
+                entry, PLATFORMS
+            )
             if unloaded:
                 hass.data[DOMAIN].pop(entry.entry_id)
 

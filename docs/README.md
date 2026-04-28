@@ -32,4 +32,3 @@ The top-level file for the wiki is [Home.md](Home.md).
 - [Platform development guide](platform-development-guide.md)
 - [Charge automation](Charge_automation.md)
 - [Changelog](changelog.md)
-

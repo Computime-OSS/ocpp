@@ -142,6 +142,7 @@ async def test_run_handles_timeout_and_other_exception(
     hass, socket_enabled, cp_id, port, setup_config_entry, monkeypatch
 ):
     """Covers 537 and 540–541: run() swallows TimeoutError and logs other exceptions, then stops."""
+
     # Avoid a long-lived monitor_connection task (ping loop); this test targets run() only.
     async def noop_monitor(self):
         return
@@ -200,6 +201,7 @@ async def test_update_returns_early_when_root_device_missing(
     hass, socket_enabled, cp_id, port, setup_config_entry, monkeypatch
 ):
     """update() delegates to adapter.signal_state_changed; empty refresh if no root device."""
+
     async def noop_monitor(self):
         return
 
@@ -290,6 +292,7 @@ async def test_update_traverses_children_and_skips_visited(
     hass, socket_enabled, cp_id, port, setup_config_entry, monkeypatch
 ):
     """get_entity_ids_to_refresh skips visited devices; duplicate graph edges are ignored."""
+
     async def noop_monitor(self):
         return
 

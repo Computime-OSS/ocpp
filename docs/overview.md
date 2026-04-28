@@ -53,4 +53,3 @@ This repository documentation is organized so that:
 - Shared deliverables (`documentation-index`, `overview`, `use-cases`, `glossary`, `style-guide`) provide baseline interoperability alignment
 - Implementation deliverables describe connector architecture, configuration, operation, and troubleshooting
 - Versioned changes are tracked in `changelog.md` and should stay synchronized with integration release metadata
-

@@ -61,7 +61,6 @@ from .smart_charging import (
 from .core_const import (
     CentralSystemSettings,
     ChargerSystemSettings,
-    DOMAIN,
     HA_ENERGY_UNIT,
 )
 from .core_errors import OcppError, OcppValidationError
@@ -446,7 +445,9 @@ class ChargePoint(cp):
             raise OcppError(
                 f"Failed to set variable: {resp.status}"
                 + (
-                    f": {resp.status_info}" if getattr(resp, "status_info", None) else ""
+                    f": {resp.status_info}"
+                    if getattr(resp, "status_info", None)
+                    else ""
                 )
             )
 
@@ -583,7 +584,9 @@ class ChargePoint(cp):
         try:
             [c, v] = key.split("/")
         except ValueError:
-            raise OcppValidationError("Invalid OCPP key; expected format Component/Variable")
+            raise OcppValidationError(
+                "Invalid OCPP key; expected format Component/Variable"
+            )
         [cname, paren, cinstance] = c.partition("(")
         cinstance = cinstance.partition(")")[0]
         [vname, paren, vinstance] = v.partition("(")
@@ -695,7 +698,10 @@ class ChargePoint(cp):
         """Debounce smart charging runs after rapid Notify* sequences."""
         if self.hass is None:
             return
-        if self._smart_charging_recompute_task and not self._smart_charging_recompute_task.done():
+        if (
+            self._smart_charging_recompute_task
+            and not self._smart_charging_recompute_task.done()
+        ):
             self._smart_charging_recompute_task.cancel()
         self._smart_charging_recompute_task = self.hass.async_create_task(
             self._debounced_smart_charging()
@@ -883,7 +889,9 @@ class ChargePoint(cp):
     @on(Action.notify_ev_charging_needs)
     def on_notify_ev_charging_needs(self, **kwargs):
         """Handle NotifyEVChargingNeeds sent by the charger."""
-        self._record_incoming_notification(Action.notify_ev_charging_needs.value, kwargs)
+        self._record_incoming_notification(
+            Action.notify_ev_charging_needs.value, kwargs
+        )
         self._store_smart_charging_notify("needs", kwargs)
         return call_result.NotifyEVChargingNeeds(
             NotifyEVChargingNeedsStatusEnumType.accepted

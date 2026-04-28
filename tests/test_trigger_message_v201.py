@@ -15,7 +15,10 @@ def test_to_message_trigger_aliases():
     assert _to_message_trigger_v201("BootNotification") == "BootNotification"
     assert _to_message_trigger_v201("boot_notification") == "BootNotification"
     assert _to_message_trigger_v201("MeterValues") == "MeterValues"
-    assert _to_message_trigger_v201("diagnostics_status_notification") == "LogStatusNotification"
+    assert (
+        _to_message_trigger_v201("diagnostics_status_notification")
+        == "LogStatusNotification"
+    )
 
 
 def test_to_message_trigger_unknown():

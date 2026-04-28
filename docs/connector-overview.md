@@ -226,4 +226,3 @@ Access model:
 A template repository will be provided for this documentation model.
 
 When available, this connector docs set should align to that template structure and terminology guide to keep cross-connector documentation consistent.
-

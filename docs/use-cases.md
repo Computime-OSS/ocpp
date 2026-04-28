@@ -52,4 +52,3 @@ The use cases are protocol-agnostic, but this repository demonstrates them throu
 
 These use cases are baseline interoperability targets.
 Repository documentation and examples should show that OCPP message handling, control actions, and telemetry paths support these outcomes.
-

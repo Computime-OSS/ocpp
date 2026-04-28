@@ -45,8 +45,7 @@ from pathlib import Path
 
 
 def _ensure_pypi_ocpp_first() -> None:
-    """Make ``import ocpp`` resolve to the official PyPI package, not ``custom_components/ocpp``.
-    """
+    """Make ``import ocpp`` resolve to the official PyPI package, not ``custom_components/ocpp``."""
     candidates: list[Path] = []
     try:
         candidates.append(Path(site.getusersitepackages()))
@@ -117,7 +116,9 @@ def _websocket_url_for_charge_point(ws_url: str, charge_point_identity: str) -> 
     Otherwise the last path segment is replaced (e.g. ``.../TEST-001`` → ``.../TEST-v201``).
     """
     if "{id}" in ws_url or "{cp_id}" in ws_url:
-        return ws_url.replace("{id}", charge_point_identity).replace("{cp_id}", charge_point_identity)
+        return ws_url.replace("{id}", charge_point_identity).replace(
+            "{cp_id}", charge_point_identity
+        )
     parts = urlsplit(ws_url)
     segments = [s for s in (parts.path or "").split("/") if s]
     if segments:
@@ -125,7 +126,9 @@ def _websocket_url_for_charge_point(ws_url: str, charge_point_identity: str) -> 
         new_path = "/" + "/".join(segments)
     else:
         new_path = f"/{charge_point_identity}"
-    return urlunsplit((parts.scheme, parts.netloc, new_path, parts.query, parts.fragment))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, new_path, parts.query, parts.fragment)
+    )
 
 
 def charge_point_id_for_suite(suite_key: str) -> str:
@@ -155,7 +158,9 @@ def charge_point_id_for_suite(suite_key: str) -> str:
 
 def target_ws_url_for_suite(suite_key: str) -> str:
     """WebSocket URL for this suite (path segment matches ``charge_point_id_for_suite``)."""
-    return _websocket_url_for_charge_point(TARGET_WS_URL, charge_point_id_for_suite(suite_key))
+    return _websocket_url_for_charge_point(
+        TARGET_WS_URL, charge_point_id_for_suite(suite_key)
+    )
 
 
 def _parse_run_suites() -> list[str]:
@@ -289,13 +294,15 @@ def record_result(
             elif not row["passed"]:
                 row["message"] = message
             return
-    results.append({
-        "suite": s,
-        "action": action,
-        "passed": passed,
-        "message": message,
-        "category": category,
-    })
+    results.append(
+        {
+            "suite": s,
+            "action": action,
+            "passed": passed,
+            "message": message,
+            "category": category,
+        }
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -304,7 +311,12 @@ def record_result(
 class TestChargePoint(CP16Base):
     """OCPP 1.6 charge point client that records server capability test results."""
 
-    def __init__(self, charge_point_id: str, websocket: websockets.WebSocketClientProtocol, results: list[dict]):
+    def __init__(
+        self,
+        charge_point_id: str,
+        websocket: websockets.WebSocketClientProtocol,
+        results: list[dict],
+    ):
         super().__init__(charge_point_id, websocket)
         self.results = results
         self.active_transaction_id: int = 0
@@ -345,7 +357,9 @@ class TestChargePoint(CP16Base):
         if ev is not None:
             ev.set()
 
-    async def _begin_session_from_remote_start(self, id_tag: str, connector_id: int) -> None:
+    async def _begin_session_from_remote_start(
+        self, id_tag: str, connector_id: int
+    ) -> None:
         """After RemoteStart Accepted: send StartTransaction so CSMS tracks a session for RemoteStop."""
         global LOG_ACTION
         LOG_ACTION = "RemoteStart→StartTransaction"
@@ -430,7 +444,9 @@ class TestChargePoint(CP16Base):
 
     # ----- Server-initiated: record when we receive and respond -----
     @on(Action.get_configuration)
-    def on_get_configuration(self, key: list[str] | None = None, **kwargs) -> call_result.GetConfiguration:
+    def on_get_configuration(
+        self, key: list[str] | None = None, **kwargs
+    ) -> call_result.GetConfiguration:
         global LOG_ACTION
         LOG_ACTION = "GetConfiguration"
         LOGGER.info("Received GetConfiguration from server; responding.")
@@ -447,13 +463,21 @@ class TestChargePoint(CP16Base):
                 for k in keys
             ]
             out = call_result.GetConfiguration(configuration_key=config_list)
-        record_result(self.results, "GetConfiguration", True, "Received and responded", "server_sent")
+        record_result(
+            self.results,
+            "GetConfiguration",
+            True,
+            "Received and responded",
+            "server_sent",
+        )
         self._notify_server_action("GetConfiguration")
         LOG_ACTION = None
         return out
 
     @on(Action.change_configuration)
-    def on_change_configuration(self, key: str, value: str, **kwargs) -> call_result.ChangeConfiguration:
+    def on_change_configuration(
+        self, key: str, value: str, **kwargs
+    ) -> call_result.ChangeConfiguration:
         """OCPP post_connect calls ChangeConfiguration for measurands and meter intervals."""
         global LOG_ACTION
         LOG_ACTION = "ChangeConfiguration"
@@ -462,12 +486,16 @@ class TestChargePoint(CP16Base):
             "Received ChangeConfiguration from server; key=%s — responding Accepted.",
             key,
         )
-        record_result(self.results, "ChangeConfiguration", True, "Accepted", "server_sent")
+        record_result(
+            self.results, "ChangeConfiguration", True, "Accepted", "server_sent"
+        )
         LOG_ACTION = None
         return call_result.ChangeConfiguration(status=ConfigurationStatus.accepted)
 
     @on(Action.trigger_message)
-    def on_trigger_message(self, requested_message, **kwargs) -> call_result.TriggerMessage:
+    def on_trigger_message(
+        self, requested_message, **kwargs
+    ) -> call_result.TriggerMessage:
         """OCPP may send TriggerMessage after connect (BootNotification / StatusNotification)."""
         global LOG_ACTION
         LOG_ACTION = "TriggerMessage"
@@ -484,7 +512,13 @@ class TestChargePoint(CP16Base):
         global LOG_ACTION
         LOG_ACTION = "SetChargingProfile"
         LOGGER.info("Received SetChargingProfile from server; responding Accepted.")
-        record_result(self.results, "SetChargingProfile", True, "Received and responded", "server_sent")
+        record_result(
+            self.results,
+            "SetChargingProfile",
+            True,
+            "Received and responded",
+            "server_sent",
+        )
         self._notify_server_action("SetChargingProfile")
         LOG_ACTION = None
         return call_result.SetChargingProfile(ChargingProfileStatus.accepted)
@@ -494,17 +528,31 @@ class TestChargePoint(CP16Base):
         global LOG_ACTION
         LOG_ACTION = "ClearChargingProfile"
         LOGGER.info("Received ClearChargingProfile from server; responding Accepted.")
-        record_result(self.results, "ClearChargingProfile", True, "Received and responded", "server_sent")
+        record_result(
+            self.results,
+            "ClearChargingProfile",
+            True,
+            "Received and responded",
+            "server_sent",
+        )
         self._notify_server_action("ClearChargingProfile")
         LOG_ACTION = None
         return call_result.ClearChargingProfile(ClearChargingProfileStatus.accepted)
 
     @on(Action.remote_start_transaction)
-    def on_remote_start_transaction(self, id_tag: str | None = None, connector_id: int | None = None, **kwargs) -> call_result.RemoteStartTransaction:
+    def on_remote_start_transaction(
+        self, id_tag: str | None = None, connector_id: int | None = None, **kwargs
+    ) -> call_result.RemoteStartTransaction:
         global LOG_ACTION
         LOG_ACTION = "RemoteStartTransaction"
         LOGGER.info("Received RemoteStartTransaction from server; responding Accepted.")
-        record_result(self.results, "RemoteStartTransaction", True, "Received and responded", "server_sent")
+        record_result(
+            self.results,
+            "RemoteStartTransaction",
+            True,
+            "Received and responded",
+            "server_sent",
+        )
         self._notify_server_action("RemoteStartTransaction")
         id_resolved = id_tag or "remote_start"
         cid = connector_id if connector_id is not None else 1
@@ -513,22 +561,38 @@ class TestChargePoint(CP16Base):
         return call_result.RemoteStartTransaction(RemoteStartStopStatus.accepted)
 
     @on(Action.remote_stop_transaction)
-    def on_remote_stop_transaction(self, transaction_id: int | None = None, **kwargs) -> call_result.RemoteStopTransaction:
+    def on_remote_stop_transaction(
+        self, transaction_id: int | None = None, **kwargs
+    ) -> call_result.RemoteStopTransaction:
         global LOG_ACTION
         LOG_ACTION = "RemoteStopTransaction"
         LOGGER.info("Received RemoteStopTransaction from server; responding Accepted.")
-        record_result(self.results, "RemoteStopTransaction", True, "Received and responded", "server_sent")
+        record_result(
+            self.results,
+            "RemoteStopTransaction",
+            True,
+            "Received and responded",
+            "server_sent",
+        )
         self._notify_server_action("RemoteStopTransaction")
         self._schedule_coro(self._end_session_from_remote_stop(transaction_id))
         LOG_ACTION = None
         return call_result.RemoteStopTransaction(RemoteStartStopStatus.accepted)
 
     @on(Action.change_availability)
-    def on_change_availability(self, connector_id: int | None = None, type: str | None = None, **kwargs) -> call_result.ChangeAvailability:
+    def on_change_availability(
+        self, connector_id: int | None = None, type: str | None = None, **kwargs
+    ) -> call_result.ChangeAvailability:
         global LOG_ACTION
         LOG_ACTION = "ChangeAvailability"
         LOGGER.info("Received ChangeAvailability from server; responding Accepted.")
-        record_result(self.results, "ChangeAvailability", True, "Received and responded", "server_sent")
+        record_result(
+            self.results,
+            "ChangeAvailability",
+            True,
+            "Received and responded",
+            "server_sent",
+        )
         self._notify_server_action("ChangeAvailability")
         LOG_ACTION = None
         return call_result.ChangeAvailability(AvailabilityStatus.accepted)
@@ -547,7 +611,12 @@ class TestChargePoint(CP16Base):
             if resp.status == RegistrationStatus.accepted:
                 record_result(self.results, "BootNotification", True, "Server accepted")
             else:
-                record_result(self.results, "BootNotification", False, f"Server status: {resp.status}")
+                record_result(
+                    self.results,
+                    "BootNotification",
+                    False,
+                    f"Server status: {resp.status}",
+                )
         except Exception as e:
             LOGGER.exception("BootNotification failed")
             record_result(self.results, "BootNotification", False, str(e))
@@ -564,7 +633,9 @@ class TestChargePoint(CP16Base):
             if status == AuthorizationStatus.accepted:
                 record_result(self.results, "Authorize", True, "Server accepted")
             else:
-                record_result(self.results, "Authorize", False, f"id_tag_info status: {status}")
+                record_result(
+                    self.results, "Authorize", False, f"id_tag_info status: {status}"
+                )
         except Exception as e:
             LOGGER.exception("Authorize failed")
             record_result(self.results, "Authorize", False, str(e))
@@ -578,7 +649,9 @@ class TestChargePoint(CP16Base):
             req = call.Heartbeat()
             resp = await self.call(req)
             if resp.current_time:
-                record_result(self.results, "Heartbeat", True, "Server returned currentTime")
+                record_result(
+                    self.results, "Heartbeat", True, "Server returned currentTime"
+                )
             else:
                 record_result(self.results, "Heartbeat", False, "Missing currentTime")
         except Exception as e:
@@ -616,8 +689,18 @@ class TestChargePoint(CP16Base):
                     {
                         "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "sampledValue": [
-                            {"value": "1000", "context": "Sample.Periodic", "measurand": "Energy.Active.Import.Register", "unit": "Wh"},
-                            {"value": "0", "context": "Sample.Periodic", "measurand": "Current.Import", "unit": "A"},
+                            {
+                                "value": "1000",
+                                "context": "Sample.Periodic",
+                                "measurand": "Energy.Active.Import.Register",
+                                "unit": "Wh",
+                            },
+                            {
+                                "value": "0",
+                                "context": "Sample.Periodic",
+                                "measurand": "Current.Import",
+                                "unit": "A",
+                            },
                         ],
                     }
                 ],
@@ -645,9 +728,19 @@ class TestChargePoint(CP16Base):
             self.active_transaction_id = resp.transaction_id
             status = resp.id_tag_info.get("status") if resp.id_tag_info else None
             if status == AuthorizationStatus.accepted:
-                record_result(self.results, "StartTransaction", True, f"transaction_id={resp.transaction_id}")
+                record_result(
+                    self.results,
+                    "StartTransaction",
+                    True,
+                    f"transaction_id={resp.transaction_id}",
+                )
             else:
-                record_result(self.results, "StartTransaction", False, f"id_tag_info status: {status}")
+                record_result(
+                    self.results,
+                    "StartTransaction",
+                    False,
+                    f"id_tag_info status: {status}",
+                )
         except Exception as e:
             LOGGER.exception("StartTransaction failed")
             record_result(self.results, "StartTransaction", False, str(e))
@@ -672,7 +765,12 @@ class TestChargePoint(CP16Base):
                 record_result(self.results, "StopTransaction", True, "Server accepted")
                 self.active_transaction_id = 0
             else:
-                record_result(self.results, "StopTransaction", False, f"id_tag_info status: {status}")
+                record_result(
+                    self.results,
+                    "StopTransaction",
+                    False,
+                    f"id_tag_info status: {status}",
+                )
         except Exception as e:
             LOGGER.exception("StopTransaction failed")
             record_result(self.results, "StopTransaction", False, str(e))
@@ -760,7 +858,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
-                LOGGER.warning("No running event loop; cannot run async OCPP follow-up.")
+                LOGGER.warning(
+                    "No running event loop; cannot run async OCPP follow-up."
+                )
                 return
             self._follow_up_tasks.append(loop.create_task(coro))
 
@@ -832,7 +932,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             finally:
                 LOG_ACTION = None
 
-        async def _transaction_ended_after_request_stop(self, transaction_id: str | None) -> None:
+        async def _transaction_ended_after_request_stop(
+            self, transaction_id: str | None
+        ) -> None:
             global LOG_ACTION
             LOG_ACTION = "RequestStopTransaction→TransactionEvent"
             tid = transaction_id or self.active_transaction_id
@@ -864,11 +966,15 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
         def on_get_base_report(self, **kwargs) -> cr2.GetBaseReport:
             rid = int(kwargs.get("request_id") or 0)
             self._schedule_coro(self._notify_report_after_get_base(rid))
-            return cr2.GetBaseReport(status=en.GenericDeviceModelStatusEnumType.accepted)
+            return cr2.GetBaseReport(
+                status=en.GenericDeviceModelStatusEnumType.accepted
+            )
 
         @on(Action.update_firmware)
         def on_update_firmware(self, **kwargs) -> cr2.UpdateFirmware:
-            LOGGER.info("Received UpdateFirmware from server; responding Rejected (dummy URL probe).")
+            LOGGER.info(
+                "Received UpdateFirmware from server; responding Rejected (dummy URL probe)."
+            )
             return cr2.UpdateFirmware(status=en.UpdateFirmwareStatusEnumType.rejected)
 
         @on(Action.get_variables)
@@ -892,7 +998,10 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         attribute_value=val,
                     )
                 )
-            LOGGER.info("Received GetVariables from server; responding (%s result(s)).", len(gvr))
+            LOGGER.info(
+                "Received GetVariables from server; responding (%s result(s)).",
+                len(gvr),
+            )
             record_result(
                 self.results,
                 "GetConfiguration",
@@ -928,7 +1037,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         variable=var,
                     )
                 )
-            LOGGER.info("Received SetVariables from server; %s variable(s).", len(results))
+            LOGGER.info(
+                "Received SetVariables from server; %s variable(s).", len(results)
+            )
             record_result(
                 self.results,
                 "ChangeConfiguration",
@@ -945,7 +1056,10 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             global LOG_ACTION
             LOG_ACTION = "TriggerMessage"
             rm = kwargs.get("requested_message")
-            LOGGER.info("Received TriggerMessage from server; requested=%s — responding Accepted.", rm)
+            LOGGER.info(
+                "Received TriggerMessage from server; requested=%s — responding Accepted.",
+                rm,
+            )
             record_result(
                 self.results,
                 "TriggerMessage",
@@ -972,13 +1086,17 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             )
             self._notify_server_action("SetChargingProfile")
             LOG_ACTION = None
-            return cr2.SetChargingProfile(status=en.ChargingProfileStatusEnumType.accepted)
+            return cr2.SetChargingProfile(
+                status=en.ChargingProfileStatusEnumType.accepted
+            )
 
         @on(Action.clear_charging_profile)
         def on_clear_charging_profile(self, **kwargs) -> cr2.ClearChargingProfile:
             global LOG_ACTION
             LOG_ACTION = "ClearChargingProfile"
-            LOGGER.info("Received ClearChargingProfile from server; responding Accepted.")
+            LOGGER.info(
+                "Received ClearChargingProfile from server; responding Accepted."
+            )
             record_result(
                 self.results,
                 "ClearChargingProfile",
@@ -989,7 +1107,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             )
             self._notify_server_action("ClearChargingProfile")
             LOG_ACTION = None
-            return cr2.ClearChargingProfile(status=en.ClearChargingProfileStatusEnumType.accepted)
+            return cr2.ClearChargingProfile(
+                status=en.ClearChargingProfileStatusEnumType.accepted
+            )
 
         @on(Action.request_start_transaction)
         def on_request_start_transaction(self, **kwargs) -> cr2.RequestStartTransaction:
@@ -1000,7 +1120,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             evse_id = kwargs.get("evse_id")
             if evse_id is None:
                 evse_id = 1
-            LOGGER.info("Received RequestStartTransaction from server; responding Accepted.")
+            LOGGER.info(
+                "Received RequestStartTransaction from server; responding Accepted."
+            )
             record_result(
                 self.results,
                 "RemoteStartTransaction",
@@ -1048,7 +1170,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             global LOG_ACTION
             LOG_ACTION = "RequestStopTransaction"
             tid = kwargs.get("transaction_id")
-            LOGGER.info("Received RequestStopTransaction from server; responding Accepted.")
+            LOGGER.info(
+                "Received RequestStopTransaction from server; responding Accepted."
+            )
             record_result(
                 self.results,
                 "RemoteStopTransaction",
@@ -1058,9 +1182,13 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                 suite=self._suite,
             )
             self._notify_server_action("RemoteStopTransaction")
-            self._schedule_coro(self._transaction_ended_after_request_stop(str(tid) if tid else None))
+            self._schedule_coro(
+                self._transaction_ended_after_request_stop(str(tid) if tid else None)
+            )
             LOG_ACTION = None
-            return cr2.RequestStopTransaction(status=en.RequestStartStopStatusEnumType.accepted)
+            return cr2.RequestStopTransaction(
+                status=en.RequestStartStopStatusEnumType.accepted
+            )
 
         @on(Action.change_availability)
         def on_change_availability(self, **kwargs) -> cr2.ChangeAvailability:
@@ -1077,7 +1205,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
             )
             self._notify_server_action("ChangeAvailability")
             LOG_ACTION = None
-            return cr2.ChangeAvailability(status=en.ChangeAvailabilityStatusEnumType.accepted)
+            return cr2.ChangeAvailability(
+                status=en.ChangeAvailabilityStatusEnumType.accepted
+            )
 
         async def test_boot_notification(self) -> None:
             global LOG_ACTION
@@ -1101,7 +1231,13 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         suite=self._suite,
                     )
                 elif resp.status == en.RegistrationStatusEnumType.accepted:
-                    record_result(self.results, "BootNotification", True, "Server accepted", suite=self._suite)
+                    record_result(
+                        self.results,
+                        "BootNotification",
+                        True,
+                        "Server accepted",
+                        suite=self._suite,
+                    )
                 else:
                     record_result(
                         self.results,
@@ -1112,7 +1248,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                     )
             except Exception as e:
                 LOGGER.exception("BootNotification failed")
-                record_result(self.results, "BootNotification", False, str(e), suite=self._suite)
+                record_result(
+                    self.results, "BootNotification", False, str(e), suite=self._suite
+                )
             LOG_ACTION = None
 
         async def test_authorize(self) -> None:
@@ -1148,7 +1286,13 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         )
                     # Capability test: CSMS responded. With ISO14443 + HA defaults, expect Accepted.
                     if auth_status == en.AuthorizationStatusEnumType.accepted:
-                        record_result(self.results, "Authorize", True, "Server accepted", suite=self._suite)
+                        record_result(
+                            self.results,
+                            "Authorize",
+                            True,
+                            "Server accepted",
+                            suite=self._suite,
+                        )
                     elif auth_status is not None:
                         record_result(
                             self.results,
@@ -1167,7 +1311,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         )
             except Exception as e:
                 LOGGER.exception("Authorize failed")
-                record_result(self.results, "Authorize", False, str(e), suite=self._suite)
+                record_result(
+                    self.results, "Authorize", False, str(e), suite=self._suite
+                )
             LOG_ACTION = None
 
         async def test_heartbeat(self) -> None:
@@ -1186,12 +1332,26 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         suite=self._suite,
                     )
                 elif resp.current_time:
-                    record_result(self.results, "Heartbeat", True, "Server returned currentTime", suite=self._suite)
+                    record_result(
+                        self.results,
+                        "Heartbeat",
+                        True,
+                        "Server returned currentTime",
+                        suite=self._suite,
+                    )
                 else:
-                    record_result(self.results, "Heartbeat", False, "Missing currentTime", suite=self._suite)
+                    record_result(
+                        self.results,
+                        "Heartbeat",
+                        False,
+                        "Missing currentTime",
+                        suite=self._suite,
+                    )
             except Exception as e:
                 LOGGER.exception("Heartbeat failed")
-                record_result(self.results, "Heartbeat", False, str(e), suite=self._suite)
+                record_result(
+                    self.results, "Heartbeat", False, str(e), suite=self._suite
+                )
             LOG_ACTION = None
 
         async def test_status_notification(self) -> None:
@@ -1215,10 +1375,18 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         suite=self._suite,
                     )
                 else:
-                    record_result(self.results, "StatusNotification", True, "Server responded", suite=self._suite)
+                    record_result(
+                        self.results,
+                        "StatusNotification",
+                        True,
+                        "Server responded",
+                        suite=self._suite,
+                    )
             except Exception as e:
                 LOGGER.exception("StatusNotification failed")
-                record_result(self.results, "StatusNotification", False, str(e), suite=self._suite)
+                record_result(
+                    self.results, "StatusNotification", False, str(e), suite=self._suite
+                )
             LOG_ACTION = None
 
         async def test_meter_values(self) -> None:
@@ -1257,10 +1425,18 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         suite=self._suite,
                     )
                 else:
-                    record_result(self.results, "MeterValues", True, "Server responded", suite=self._suite)
+                    record_result(
+                        self.results,
+                        "MeterValues",
+                        True,
+                        "Server responded",
+                        suite=self._suite,
+                    )
             except Exception as e:
                 LOGGER.exception("MeterValues failed")
-                record_result(self.results, "MeterValues", False, str(e), suite=self._suite)
+                record_result(
+                    self.results, "MeterValues", False, str(e), suite=self._suite
+                )
             LOG_ACTION = None
 
         async def test_transaction_event_updated(self) -> None:
@@ -1276,7 +1452,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         timestamp=ts,
                         trigger_reason=en.TriggerReasonEnumType.meter_value_periodic,
                         seq_no=50,
-                        transaction_info=dt.TransactionType(transaction_id="no-active-tx"),
+                        transaction_info=dt.TransactionType(
+                            transaction_id="no-active-tx"
+                        ),
                         meter_value=[
                             dt.MeterValueType(
                                 timestamp=ts,
@@ -1299,10 +1477,18 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         suite=self._suite,
                     )
                 else:
-                    record_result(self.results, "TransactionEvent", True, "Server responded", suite=self._suite)
+                    record_result(
+                        self.results,
+                        "TransactionEvent",
+                        True,
+                        "Server responded",
+                        suite=self._suite,
+                    )
             except Exception as e:
                 LOGGER.exception("TransactionEvent failed")
-                record_result(self.results, "TransactionEvent", False, str(e), suite=self._suite)
+                record_result(
+                    self.results, "TransactionEvent", False, str(e), suite=self._suite
+                )
             LOG_ACTION = None
 
         async def test_trigger_message_cp(self) -> None:
@@ -1334,8 +1520,10 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         "client_sent",
                         suite=self._suite,
                     )
-            except asyncio.TimeoutError as e:
-                LOGGER.info("CP-initiated TriggerMessage: no response within timeout (%s).", e)
+            except TimeoutError as e:
+                LOGGER.info(
+                    "CP-initiated TriggerMessage: no response within timeout (%s).", e
+                )
                 record_result(
                     self.results,
                     "TriggerMessage",
@@ -1346,9 +1534,13 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                 )
             except Exception as e:
                 err_s = str(e)
-                if "NotImplemented" in err_s or "No handler for TriggerMessage" in err_s:
+                if (
+                    "NotImplemented" in err_s
+                    or "No handler for TriggerMessage" in err_s
+                ):
                     LOGGER.info(
-                        "CP-initiated TriggerMessage: CSMS does not implement (%s).", err_s
+                        "CP-initiated TriggerMessage: CSMS does not implement (%s).",
+                        err_s,
                     )
                     record_result(
                         self.results,
@@ -1389,7 +1581,9 @@ def build_ocpp2_test_charge_point_class(pkg: ModuleType) -> type:
                         ev_max_voltage=230,
                     ),
                 )
-                resp = await self.call(call2.NotifyEVChargingNeeds(charging_needs=needs, evse_id=1))
+                resp = await self.call(
+                    call2.NotifyEVChargingNeeds(charging_needs=needs, evse_id=1)
+                )
                 if resp is None:
                     record_result(
                         self.results,
@@ -1643,8 +1837,12 @@ def build_report_payload(results: list[dict]) -> dict[str, Any]:
     """Build JSON payload including OCA-style report metadata."""
     ts = datetime.now(UTC).isoformat()
     n_pass = sum(1 for r in results if r.get("passed"))
-    n_fail = sum(1 for r in results if not r.get("passed") and _result_outcome(r) == "Fail")
-    n_not_run = sum(1 for r in results if not r.get("passed") and _result_outcome(r) == "Not run")
+    n_fail = sum(
+        1 for r in results if not r.get("passed") and _result_outcome(r) == "Fail"
+    )
+    n_not_run = sum(
+        1 for r in results if not r.get("passed") and _result_outcome(r) == "Not run"
+    )
     total = len(results)
     pct = round(100.0 * n_pass / total, 1) if total else 0.0
     return {
@@ -1718,7 +1916,7 @@ def _render_html_report(payload: dict[str, Any]) -> str:
         f"<td>{esc(r.get('suite', ''))}</td>"
         f"<td><code>{esc(r['action'])}</code></td>"
         f"<td>{esc(_direction_for_row(r))}</td>"
-        f"<td class=\"outcome-{outcome_class[_result_outcome(r)]}\">"
+        f'<td class="outcome-{outcome_class[_result_outcome(r)]}">'
         f"{esc(_result_outcome(r))}</td>"
         f"<td>{esc(r.get('message', ''))}</td>"
         f"</tr>"
@@ -1730,7 +1928,7 @@ def _render_html_report(payload: dict[str, Any]) -> str:
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{esc(meta['document_title'])}</title>
+  <title>{esc(meta["document_title"])}</title>
   <style>
     :root {{
       --ink: #1a2b3c;
@@ -1838,42 +2036,42 @@ def _render_html_report(payload: dict[str, Any]) -> str:
 <body>
   <div class="sheet">
     <header class="header-band">
-      <h1>{esc(meta['document_title'])}</h1>
-      <p class="sub">{esc(meta['document_subtitle'])}</p>
+      <h1>{esc(meta["document_title"])}</h1>
+      <p class="sub">{esc(meta["document_subtitle"])}</p>
     </header>
 
     <section class="section">
       <h2>Abstract — test configuration</h2>
       <dl class="meta-grid">
         <dt>Standard / profile</dt>
-        <dd>{esc(meta['standard_reference'])}</dd>
+        <dd>{esc(meta["standard_reference"])}</dd>
         <dt>Organization</dt>
-        <dd>{esc(meta['organization'])}</dd>
+        <dd>{esc(meta["organization"])}</dd>
         <dt>Product under test</dt>
-        <dd>{esc(meta['product_under_test'])}</dd>
+        <dd>{esc(meta["product_under_test"])}</dd>
         <dt>Report generated (UTC)</dt>
-        <dd>{esc(meta['generated_at_utc'])}</dd>
+        <dd>{esc(meta["generated_at_utc"])}</dd>
         <dt>Host</dt>
-        <dd>{esc(meta['host'])}</dd>
+        <dd>{esc(meta["host"])}</dd>
         <dt>URL template / stem</dt>
-        <dd><code>{esc(cfg.get('target_url_template', cfg.get('target_url', '')))}</code> &nbsp;|&nbsp; stem <code>{esc(cfg.get('charge_point_id_stem', cfg.get('charge_point_identity', '')))}</code></dd>
+        <dd><code>{esc(cfg.get("target_url_template", cfg.get("target_url", "")))}</code> &nbsp;|&nbsp; stem <code>{esc(cfg.get("charge_point_id_stem", cfg.get("charge_point_identity", "")))}</code></dd>
         <dt>Per-suite connection</dt>
         <dd>{connections_html}</dd>
         <dt>Suites run</dt>
-        <dd>{esc(", ".join(cfg.get('suites_run', [])))}</dd>
+        <dd>{esc(", ".join(cfg.get("suites_run", [])))}</dd>
         <dt>Server-action prompt timeout</dt>
-        <dd>{esc(cfg['server_action_wait_seconds_per_prompt'])} s</dd>
+        <dd>{esc(cfg["server_action_wait_seconds_per_prompt"])} s</dd>
       </dl>
     </section>
 
     <section class="section">
       <h2>Test result summary</h2>
       <div class="summary-box">
-        <span><strong>Total</strong> {esc(summ['total'])}</span>
-        <span class="outcome-pass"><strong>Pass</strong> {esc(summ['passed'])}</span>
-        <span class="outcome-fail"><strong>Fail</strong> {esc(summ['failed'])}</span>
-        <span class="outcome-not-run"><strong>Not run</strong> {esc(summ['not_run'])}</span>
-        <span><strong>Pass rate</strong> {esc(summ['pass_rate_percent'])}%</span>
+        <span><strong>Total</strong> {esc(summ["total"])}</span>
+        <span class="outcome-pass"><strong>Pass</strong> {esc(summ["passed"])}</span>
+        <span class="outcome-fail"><strong>Fail</strong> {esc(summ["failed"])}</span>
+        <span class="outcome-not-run"><strong>Not run</strong> {esc(summ["not_run"])}</span>
+        <span><strong>Pass rate</strong> {esc(summ["pass_rate_percent"])}%</span>
       </div>
     </section>
 
@@ -1897,7 +2095,7 @@ def _render_html_report(payload: dict[str, Any]) -> str:
     </section>
 
     <section class="section disclaimer">
-      <p><strong>Note.</strong> {esc(meta['certificate_style_note'])}</p>
+      <p><strong>Note.</strong> {esc(meta["certificate_style_note"])}</p>
       <p class="footer-line">
         Layout inspired by Open Charge Alliance certificate abstracts for readability.
         This tool exercises OCPP 1.6 and 2.x flows configured under Suites run.
@@ -1943,13 +2141,15 @@ def ensure_results_for_expected(
     seen = {r["action"] for r in results if r.get("suite") == suite}
     for action in expected:
         if action not in seen:
-            results.append({
-                "suite": suite,
-                "action": action,
-                "passed": False,
-                "message": "Not exercised during test (server did not send or test did not run)",
-                "category": _default_category_for_expected(action),
-            })
+            results.append(
+                {
+                    "suite": suite,
+                    "action": action,
+                    "passed": False,
+                    "message": "Not exercised during test (server did not send or test did not run)",
+                    "category": _default_category_for_expected(action),
+                }
+            )
 
 
 def save_results(results: list[dict], path: Path) -> dict[str, Any]:
@@ -1984,7 +2184,9 @@ def print_summary(results: list[dict]) -> None:
     if fail_only:
         print("FAILED:")
         for r in fail_only:
-            print(f"  - [{r.get('suite', '')}] {r['action']}: {r.get('message', 'Failed')}")
+            print(
+                f"  - [{r.get('suite', '')}] {r['action']}: {r.get('message', 'Failed')}"
+            )
     if not_run:
         print("NOT RUN:")
         for r in not_run:
@@ -2009,7 +2211,9 @@ async def wait_for_prompted_server_action(
 ) -> bool:
     """Wait up to timeout_sec for the CSMS to send this call; record failure on timeout."""
     if _has_passing_result(results, action, suite):
-        LOGGER.info("Server action %s already completed earlier; skipping wait.", action)
+        LOGGER.info(
+            "Server action %s already completed earlier; skipping wait.", action
+        )
         return True
     ev = cp._server_action_events.get(action)
     if ev is None:
@@ -2055,7 +2259,9 @@ def print_server_action_prompt(action: str, index: int, total: int) -> None:
     sys.stdout.flush()
 
 
-async def run_prompted_server_tests(cp: TestChargePoint | Any, results: list[dict], suite: str) -> None:
+async def run_prompted_server_tests(
+    cp: TestChargePoint | Any, results: list[dict], suite: str
+) -> None:
     """After client tests: prompt and wait (sequentially) for each server-initiated action."""
     total = len(SERVER_PROMPT_SEQUENCE)
     for i, action in enumerate(SERVER_PROMPT_SEQUENCE, start=1):
@@ -2135,13 +2341,17 @@ async def run_suite_v16() -> list[dict]:
                 pass
     except Exception as e:
         LOGGER.exception("Connection or test run failed (OCPP 1.6)")
-        record_result(results, "Connection", False, str(e), "client_sent", suite=CURRENT_SUITE)
+        record_result(
+            results, "Connection", False, str(e), "client_sent", suite=CURRENT_SUITE
+        )
 
     ensure_results_for_expected(results, CURRENT_SUITE, EXPECTED_ACTIONS_V16)
     return results
 
 
-async def run_suite_ocpp2(suite_label: str, suite_key: str, subprotocols: list[str]) -> list[dict]:
+async def run_suite_ocpp2(
+    suite_label: str, suite_key: str, subprotocols: list[str]
+) -> list[dict]:
     """OCPP 2.0.1 or 2.1: connect and run 2.x client matrix + prompted server actions."""
     global CURRENT_SUITE
     CURRENT_SUITE = suite_label
@@ -2191,7 +2401,9 @@ async def run_suite_ocpp2(suite_label: str, suite_key: str, subprotocols: list[s
                 pass
     except Exception as e:
         LOGGER.exception("Connection or test run failed (%s)", suite_label)
-        record_result(results, "Connection", False, str(e), "client_sent", suite=suite_label)
+        record_result(
+            results, "Connection", False, str(e), "client_sent", suite=suite_label
+        )
 
     ensure_results_for_expected(results, suite_label, EXPECTED_ACTIONS_V2)
     return results
@@ -2202,7 +2414,9 @@ async def run_all_suites() -> list[dict]:
     combined: list[dict] = []
     suite_runners: dict[str, Callable[[], Coroutine[Any, Any, list[dict]]]] = {
         "1.6": run_suite_v16,
-        "2.0.1": lambda: run_suite_ocpp2("OCPP 2.0.1", "2.0.1", DEFAULT_SUBPROTOCOLS_201),
+        "2.0.1": lambda: run_suite_ocpp2(
+            "OCPP 2.0.1", "2.0.1", DEFAULT_SUBPROTOCOLS_201
+        ),
         "2.1": lambda: run_suite_ocpp2("OCPP 2.1", "2.1", DEFAULT_SUBPROTOCOLS_21),
     }
     for key in RUN_SUITES:
@@ -2219,9 +2433,13 @@ def main() -> int:
     print("URL template:", TARGET_WS_URL)
     print("Charge point stem:", CHARGE_POINT_ID)
     for sk in RUN_SUITES:
-        print(f"  [{sk}] id={charge_point_id_for_suite(sk)!r} url={target_ws_url_for_suite(sk)!r}")
+        print(
+            f"  [{sk}] id={charge_point_id_for_suite(sk)!r} url={target_ws_url_for_suite(sk)!r}"
+        )
     print("Suites (this run, in order):", ", ".join(RUN_SUITES))
-    print("Each suite uses its own WebSocket connection; default is all three in one process.")
+    print(
+        "Each suite uses its own WebSocket connection; default is all three in one process."
+    )
     print("JSON results:", RESULTS_FILE)
     print("HTML report:", REPORT_HTML_FILE)
     print()
@@ -2231,7 +2449,9 @@ def main() -> int:
     write_html_report(payload, REPORT_HTML_FILE)
     print_summary(results)
 
-    fail_count = sum(1 for r in results if not r["passed"] and _result_outcome(r) == "Fail")
+    fail_count = sum(
+        1 for r in results if not r["passed"] and _result_outcome(r) == "Fail"
+    )
     return 1 if fail_count > 0 else 0
 
 
