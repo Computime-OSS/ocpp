@@ -258,7 +258,7 @@ try:
         def _iter_child_device_ids(registry: Any, parent_device_id: str):
             """Yield direct child device IDs for a parent device."""
             for dev in registry.devices.values():
-                if dev.via_device_id == parent_device_id:
+                if getattr(dev, "via_device_id", None) == parent_device_id:
                     yield dev.id
 
         def get_entity_ids_to_refresh(self, charge_point_id: str) -> set[str]:

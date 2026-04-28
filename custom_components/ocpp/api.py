@@ -196,6 +196,7 @@ class CentralSystem:
             ping_timeout=None,
             close_timeout=self.settings.websocket_close_timeout,
             ssl=self.ssl_context,
+            reuse_address=True,  # sonar:approved — allow rebind after config entry reload / fast unload
         )
         self._server = server
         return self

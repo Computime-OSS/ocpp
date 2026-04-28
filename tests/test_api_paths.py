@@ -2,6 +2,7 @@
 
 import contextlib
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -444,7 +445,7 @@ def test_del_metric_variants(hass):
 
 
 @pytest.mark.asyncio
-async def test_create_uses_secure_tls_defaults(hass, monkeypatch):
+async def test_create_uses_secure_tls_defaults(hass):
     """CentralSystem.create configures secure TLS context when SSL is enabled."""
     # sonar:approved
     config = MOCK_CONFIG_DATA.copy()
@@ -474,10 +475,14 @@ async def test_create_uses_secure_tls_defaults(hass, monkeypatch):
         assert kwargs["ssl"] is ssl_context
         return fake_server
 
-    monkeypatch.setattr("custom_components.ocpp.api.ssl.create_default_context", fake_default_context)
-    monkeypatch.setattr("custom_components.ocpp.api.websockets.serve", fake_serve)
-
-    cs = await CentralSystem.create(hass, entry)
+    with (
+        patch(
+            "custom_components.ocpp.api.ssl.create_default_context",
+            fake_default_context,
+        ),
+        patch("custom_components.ocpp.api.websockets.serve", fake_serve),
+    ):
+        cs = await CentralSystem.create(hass, entry)
 
     assert cs.ssl_context is ssl_context
     assert loaded_chain == {"certfile": "cert.pem", "keyfile": "key.pem"}

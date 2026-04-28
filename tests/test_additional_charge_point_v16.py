@@ -976,6 +976,8 @@ async def test_session_energy_meter_start_cast_exception(
             # No crash is sufficient to cover lines 1023-1024
             assert True
         finally:
+            # Restore a numeric value so HA teardown does not fail sensor validation
+            srv._metrics[(1, "Energy.Meter.Start")].value = 0.0
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task

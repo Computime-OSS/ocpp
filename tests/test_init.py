@@ -24,7 +24,9 @@ from .const import (
 # Assertions allow you to verify that the return value of whatever is on the left
 # side of the assertion matches with the right side.
 async def test_setup_unload_and_reload_entry(
-    hass: AsyncGenerator[HomeAssistant, None], bypass_get_data: None
+    hass: AsyncGenerator[HomeAssistant, None],
+    bypass_get_data: None,
+    socket_enabled: None,
 ):
     """Test entry setup and unload."""
     # Create a mock entry so we don't have to go through config flow
@@ -60,7 +62,9 @@ async def test_setup_unload_and_reload_entry(
 
 
 async def test_setup_unload_and_reload_entry_multiple_connectors(
-    hass: AsyncGenerator[HomeAssistant, None], bypass_get_data: None
+    hass: AsyncGenerator[HomeAssistant, None],
+    bypass_get_data: None,
+    socket_enabled: None,
 ):
     """Test entry setup and unload."""
     # Create a mock entry so we don't have to go through config flow
@@ -96,7 +100,9 @@ async def test_setup_unload_and_reload_entry_multiple_connectors(
 
 
 async def test_migration_entry(
-    hass: AsyncGenerator[HomeAssistant, None], bypass_get_data: None
+    hass: AsyncGenerator[HomeAssistant, None],
+    bypass_get_data: None,
+    socket_enabled: None,
 ):
     """Test entry migration."""
     # Create a mock entry so we don't have to go through config flow

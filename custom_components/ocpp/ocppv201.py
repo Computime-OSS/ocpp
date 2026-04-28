@@ -453,7 +453,7 @@ class ChargePoint(cp):
     async def _apply_charging_profile(self, evse_target: int, profile: dict) -> None:
         req = call.SetChargingProfile(evse_target, profile)
         resp: call_result.SetChargingProfile = await self.call(req)
-        self._raise_for_rejected_profile(resp)
+        ChargePoint._raise_for_rejected_profile(resp)
 
     async def set_charge_rate(
         self,
